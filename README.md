@@ -23,8 +23,9 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
     python -m nwngps cli --help       # search, routes, export/merge, world map
     python -m unittest discover -s tests
 
-Settings: `Documents\NWN GPS\settings.json`. Data: `%LOCALAPPDATA%\NWN GPS` (set `NWNGPS_DATA` to
-override). The in-game DLL is loaded from `<app folder>\runtime` (some systems block DLLs loaded
+Settings: `Documents\NWN GPS\settings.json`. Data: `Documents\NWN GPS\data`, logs:
+`Documents\NWN GPS\logs` (set `NWNGPS_DATA` to override the data folder). Not AppData: packaged
+Windows apps (e.g. a terminal inside an MSIX app) get AppData silently redirected to a private copy. The in-game DLL is loaded from `<app folder>\runtime` (some systems block DLLs loaded
 from AppData).
 
 Scale (synthetic, `recon/scale_test.py`): 3,888 areas, 145,800 POIs, 9,558 transitions = 26 MB;

@@ -36,5 +36,26 @@ def main():
             runpy.run_module(PARTS[part], run_name="__main__")
 
 
+def guarded_main():
+    """Run main(); if a part crashes, write the error where the player (and support) can find it."""
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException:
+        import time
+        import traceback
+        try:
+            from .config import LOG_DIR
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            part = sys.argv[0].split()[-1] if sys.argv and " " in sys.argv[0] else "launcher"
+            with open(LOG_DIR / f"crash-{part}.log", "a", encoding="utf-8") as f:
+                f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} argv={sys.argv} cwd={__import__('os').getcwd()}\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+        raise
+
+
 if __name__ == "__main__":
-    main()
+    guarded_main()

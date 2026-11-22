@@ -103,10 +103,10 @@ def our_modules(pid):
 
 
 def runtime_dirs():
-    """Folders to load the DLL from, best first. Some systems refuse DLLs from AppData\\Local, so
-    the app's own folder comes first, then Documents\\NWN GPS, then the data folder."""
+    """Folders to load the DLL from, best first: the app's own folder, then Documents\\NWN GPS.
+    (Never AppData\\Local: packaged apps get it redirected, and the game can't see the file.)"""
     from .config import SHARE_DIR, app_dir
-    return [app_dir() / "runtime", SHARE_DIR / "runtime", RUNTIME]
+    return list(dict.fromkeys([app_dir() / "runtime", SHARE_DIR / "runtime", RUNTIME]))
 
 
 def dll_source():

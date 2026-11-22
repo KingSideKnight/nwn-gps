@@ -7,7 +7,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .config import DATA_DIR  # %LOCALAPPDATA%\\NWN GPS (see config.py)
+from .config import DATA_DIR  # Documents\\NWN GPS\\data (see config.py)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS areas (
@@ -77,37 +77,54 @@ def dist(ax, ay, bx, by):
 LEGACY_DATA = Path(__file__).resolve().parent.parent / "data"     # before release prep
 
 
+def _db_mtime(p):
+    """Last change to a database, counting its write-ahead log."""
+    wal = p.with_name(p.name + "-wal")
+    return max(p.stat().st_mtime, wal.stat().st_mtime if wal.exists() else 0)
+
+
 def migrate_legacy(log=print):
-    """One-time: copy data from the old <project>/data folder into DATA_DIR. Copies, never moves:
-    the old folder is left as it was (rollback = delete DATA_DIR)."""
-    if not LEGACY_DATA.is_dir() or LEGACY_DATA.resolve() == DATA_DIR.resolve():
-        return False
-    marker = DATA_DIR / ".migrated_from_project"
-    if marker.exists():
+    """One-time: copy data from earlier locations (<project>/data, %LOCALAPPDATA%\\NWN GPS) into
+    DATA_DIR, taking the newest copy of each database. Copies, never moves: old folders are left as
+    they were (rollback = delete DATA_DIR)."""
+    import shutil
+    from .config import OLD_LOCALAPPDATA_DIR
+    sources = [d for d in (OLD_LOCALAPPDATA_DIR, LEGACY_DATA)
+               if d.is_dir() and d.resolve() != DATA_DIR.resolve()]
+    marker = DATA_DIR / ".migrated"
+    if not sources or marker.exists():
         return False
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     copied = []
-    for db in LEGACY_DATA.glob("*.sqlite"):
-        dest = DATA_DIR / db.name
-        if not dest.exists():
-            src = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-            out = sqlite3.connect(dest)
-            with out:
-                src.backup(out)
-            src.close()
-            out.close()
-            copied.append(db.name)
-    import shutil
+    names = {p.name for d in sources for p in d.glob("*.sqlite")}
+    for name in sorted(names):
+        dest = DATA_DIR / name
+        if dest.exists():
+            continue
+        src_path = max((d / name for d in sources if (d / name).exists()), key=_db_mtime)
+        src = sqlite3.connect(src_path)               # reads through the WAL, so nothing is lost
+        out = sqlite3.connect(dest)
+        with out:
+            src.backup(out)
+        src.close()
+        out.close()
+        copied.append(f"{name} (from {src_path.parent})")
     for name in ("recent.json", "ui.json", "nav_target.json"):
-        if (LEGACY_DATA / name).exists() and not (DATA_DIR / name).exists():
-            shutil.copy2(LEGACY_DATA / name, DATA_DIR / name)
+        found = [d / name for d in sources if (d / name).exists()]
+        if found and not (DATA_DIR / name).exists():
+            shutil.copy2(max(found, key=lambda p: p.stat().st_mtime), DATA_DIR / name)
             copied.append(name)
-    if (LEGACY_DATA / "maps").is_dir() and not (DATA_DIR / "maps").exists():
-        shutil.copytree(LEGACY_DATA / "maps", DATA_DIR / "maps")
+    maps = [d / "maps" for d in sources if (d / "maps").is_dir()]
+    if maps and not (DATA_DIR / "maps").exists():
+        (DATA_DIR / "maps").mkdir()
+        for m in maps:
+            for f in m.glob("*.png"):
+                if not (DATA_DIR / "maps" / f.name).exists():
+                    shutil.copy2(f, DATA_DIR / "maps" / f.name)
         copied.append("maps/")
-    marker.write_text(str(LEGACY_DATA))
+    marker.write_text("\n".join(str(s) for s in sources))
     if copied:
-        log(f"copied your existing data from {LEGACY_DATA} to {DATA_DIR}: {', '.join(copied)}")
+        log(f"copied your existing map data to {DATA_DIR}: {', '.join(copied)}")
     return bool(copied)
 
 

@@ -2,7 +2,8 @@
 
   Documents\\NWN GPS\\settings.json   settings you may edit (created on first run)
   Documents\\NWN GPS\\Exports, Inbox  map sharing
-  %LOCALAPPDATA%\\NWN GPS              map databases, map image cache, logs, runtime files
+  Documents\\NWN GPS\\data            map databases, map image cache, backups
+  Documents\\NWN GPS\\logs            logs
 
 The game install is found automatically (running game, Steam libraries, GOG registry,
 common Beamdog paths); set "game_dir" in settings.json if it isn't.
@@ -42,9 +43,12 @@ def documents_dir():
 
 SHARE_DIR = documents_dir() / APP
 SETTINGS_FILE = SHARE_DIR / "settings.json"
-DATA_DIR = Path(os.environ.get("NWNGPS_DATA") or
-                (Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP))
-LOG_DIR = DATA_DIR / "logs"
+# Data lives under Documents (like NWN's own files), not AppData\Local: packaged Windows apps
+# (MSIX) get AppData\Local silently redirected to a private copy, so a GPS started from one would
+# not see the data of a GPS started from Explorer, and the game couldn't load DLLs placed there.
+DATA_DIR = Path(os.environ.get("NWNGPS_DATA") or (SHARE_DIR / "data"))
+LOG_DIR = SHARE_DIR / "logs"
+OLD_LOCALAPPDATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP
 
 DEFAULT_HOTKEYS = {
     "search": "Ctrl+Shift+F", "clear": "Ctrl+Shift+X", "map": "Ctrl+Shift+M", "hide": "Ctrl+Shift+G",

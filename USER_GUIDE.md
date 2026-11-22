@@ -62,12 +62,13 @@ The panel always shows these keys at the bottom, so you don't need to memorise t
 - **Alternatives without the in-game panel:** `NWN-GPS.exe overlay "<place>"` (a window on top of the
   game: windowed or borderless mode, or `--other-screen` for a second monitor) and
   `NWN-GPS.exe hud` (text through RivaTuner Statistics Server).
-- Logs: `%LOCALAPPDATA%\NWN GPS\logs`.
+- Logs: `Documents\NWN GPS\logs`. If a part keeps failing at startup, the NWN GPS window stops
+  restarting it and shows the error.
 
 ## Your data
-- Maps: `%LOCALAPPDATA%\NWN GPS\<world>.sqlite`, with automatic backups in `backups\` before imports.
+- Maps: `Documents\NWN GPS\data\<world>.sqlite`, with automatic backups in `data\backups\` before imports.
 - Nothing is uploaded anywhere. Sharing only happens when you send an exported file yourself.
-- To remove NWN GPS: delete its folder, `%LOCALAPPDATA%\NWN GPS` and `Documents\NWN GPS`.
+- To remove NWN GPS: delete its folder and `Documents\NWN GPS`.
 
 ## License
 NWN GPS is free software under the MIT License (`LICENSE.txt`). It is an unofficial fan-made tool,
