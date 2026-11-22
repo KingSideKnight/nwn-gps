@@ -34,6 +34,9 @@ AREA_NAME = 0x238      # char* (CExoString)
 AREA_WIDTH = 0x0C      # int32 tiles (7x9 Mercantile Building, 15x12 Cordor Frontier)
 AREA_HEIGHT = 0x10     # (+0x2A0 was wrong: that's the size of a 10-entry list)
 
+AREA_TILES = 0x298     # CNWCTile[w*h], contiguous, row-major from the south-west corner
+TILE_STRIDE = 0x60
+TILE_ID, TILE_HEIGHT, TILE_X, TILE_Y, TILE_ORIENT = 0x14, 0x18, 0x1C, 0x20, 0x24   # from CNWTile setters
 AREA_PINS = 0x2B8      # CExoArrayList<CNWCMapPin*> {ptr, int size, int cap}
 AREA_OBJECT_IDS = 0x318  # CExoArrayList<OBJECT_ID>: every object in the area
 AREA_SOUND_IDS = 0x2C8   # CExoArrayList<OBJECT_ID>: sound objects

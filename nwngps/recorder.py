@@ -16,7 +16,7 @@ Read-only towards the game. Ctrl+C to stop.
 """
 import time
 
-from . import objects
+from . import maps, objects
 from .db import Store
 from .session import IN_GAME, MENU, NO_GAME, Session
 
@@ -85,6 +85,11 @@ class Recorder:
     def record_pois(self, snap):
         st = self.store(snap.world)
         mem, table = self.session.mem, self.session.table
+        if snap.size and not st.tiles(snap.area):
+            tiles = maps.read_tiles(mem, snap.area_ptr, *snap.size)
+            if tiles:
+                st.save_tiles(snap.area, snap.tileset, *snap.size, tiles)
+                log(f"  tile layout saved ({snap.size[0]}x{snap.size[1]}, {snap.tileset})")
         pois = objects.map_pins(mem, snap.area_ptr) + (objects.doors(mem, snap.area_ptr, table) if table else [])
         before = st.stats()["pois"]
         for p in pois:

@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS transitions (
     last_seen   REAL
 );
 CREATE INDEX IF NOT EXISTS trans_from ON transitions(from_area);
+CREATE TABLE IF NOT EXISTS area_tiles (
+    resref      TEXT PRIMARY KEY,
+    tileset     TEXT,
+    width       INTEGER,
+    height      INTEGER,
+    tiles       TEXT,       -- JSON [[tile_id, orientation, height], ...] row-major from the SW corner
+    seen        REAL
+);
 """
 
 # Columns added after the first schema; applied with ALTER TABLE when missing.
@@ -147,6 +155,17 @@ class Store:
 
     def commit(self):
         self.db.commit()
+
+    def save_tiles(self, resref, tileset, w, h, tiles):
+        import json
+        self.db.execute("INSERT OR REPLACE INTO area_tiles(resref,tileset,width,height,tiles,seen) VALUES(?,?,?,?,?,?)",
+                        (resref, tileset, w, h, json.dumps(tiles), time.time()))
+        self.db.commit()
+
+    def tiles(self, resref):
+        import json
+        r = self.db.execute("SELECT * FROM area_tiles WHERE resref=?", (resref,)).fetchone()
+        return (r["tileset"], r["width"], r["height"], [tuple(t) for t in json.loads(r["tiles"])]) if r else None
 
     # --- reads --------------------------------------------------------------
     def area(self, resref):

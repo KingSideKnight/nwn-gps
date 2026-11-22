@@ -20,6 +20,7 @@ FG, DIM = (232, 238, 242, 255), (125, 138, 148, 255)
 PIN, DOOR, ME, ROUTE = (242, 201, 76, 255), (176, 122, 74, 255), (63, 193, 255, 255), (76, 217, 100, 255)
 MAP_BG, MAP_EDGE, GRID = (24, 32, 39, 230), (42, 54, 64, 255), (30, 40, 48, 255)
 ACCENT_RGBA = (63, 193, 255, 255)
+_scaled = {}     # last scaled tile map (scaling every frame is wasted work)
 
 
 @lru_cache(maxsize=16)
@@ -126,7 +127,7 @@ def render_picker(picker, area_name):
 HOTKEYS = [("F", "Search"), ("X", "Clear"), ("G", "Hide")]
 
 
-def render(snap, g, pois, area_size=None):
+def render(snap, g, pois, area_size=None, map_img=None):
     img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
@@ -142,7 +143,7 @@ def render(snap, g, pois, area_size=None):
         _guidance(d, g)
     else:
         _text(d, 14, 40, "No destination. Press Ctrl+Shift+F to choose one.", 10, DIM, width=W - 28)
-    _map(d, snap, g, pois, area_size)
+    _map(img, d, snap, g, pois, area_size, map_img)
     _text(d, 14, H - 12, (snap.area_name or snap.area or "")[:46], 8, DIM, anchor="ls")
     _text(d, W - 14, H - 12, (snap.server or "").replace("ARE_", ""), 8, DIM, anchor="rs")
     return img.resize((W, H), Image.LANCZOS)
@@ -166,7 +167,7 @@ def _guidance(d, g):
         _text(d, 14, ARROW_Y + 42, g.line2, 8, DIM, width=W - 28)
 
 
-def _map(d, s, g, pois, area_size):
+def _map(img, d, s, g, pois, area_size, map_img=None):
     w_m, h_m = (area_size[0] * 10, area_size[1] * 10) if area_size and all(area_size) else (0, 0)
     if not w_m or not h_m:
         xs = [p["x"] for p in pois] + [s.pos[0]]
@@ -182,17 +183,29 @@ def _map(d, s, g, pois, area_size):
     x0, y0 = P(0, h_m)
     x1, y1 = P(w_m, 0)
     d.rectangle((x0 * SS, y0 * SS, x1 * SS, y1 * SS), fill=MAP_BG, outline=MAP_EDGE, width=SS)
-    for i in range(1, int(w_m // 10)):
-        gx = P(i * 10, 0)[0] * SS
-        d.line((gx, y0 * SS, gx, y1 * SS), fill=GRID, width=1)
-    for j in range(1, int(h_m // 10)):
-        gy = P(0, j * 10)[1] * SS
-        d.line((x0 * SS, gy, x1 * SS, gy), fill=GRID, width=1)
+    if map_img is not None and area_size and map_img.size == (area_size[0] * 32, area_size[1] * 32):
+        size = (max(1, round((x1 - x0) * SS)), max(1, round((y1 - y0) * SS)))
+        ck = (id(map_img), size)
+        if _scaled.get("key") != ck:
+            _scaled.update(key=ck, img=map_img.resize(size, Image.LANCZOS))
+        img.alpha_composite(_scaled["img"], (round(x0 * SS), round(y0 * SS)))
+    else:
+        for i in range(1, int(w_m // 10)):
+            gx = P(i * 10, 0)[0] * SS
+            d.line((gx, y0 * SS, gx, y1 * SS), fill=GRID, width=1)
+        for j in range(1, int(h_m // 10)):
+            gy = P(0, j * 10)[1] * SS
+            d.line((x0 * SS, gy, x1 * SS, gy), fill=GRID, width=1)
     for p in pois:
         px, py = P(p["x"], p["y"])
         if p["kind"] == "pin":
-            d.ellipse(((px - 4) * SS, (py - 4) * SS, (px + 4) * SS, (py + 4) * SS), fill=PIN)
-            _text(d, px + 6, py, (p["name"] or "")[:22], 7, PIN, anchor="lm")
+            d.ellipse(((px - 4) * SS, (py - 4) * SS, (px + 4) * SS, (py + 4) * SS), fill=PIN,
+                      outline=(0, 0, 0, 200), width=SS)
+            label = (p["name"] or "")[:22]
+            # dark halo so labels stay readable over the tile art
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                _text(d, px + 6 + dx * 0.6, py + dy * 0.6, label, 7, (0, 0, 0, 220), anchor="lm")
+            _text(d, px + 6, py, label, 7, PIN, anchor="lm")
         else:
             d.rectangle(((px - 2) * SS, (py - 2) * SS, (px + 2) * SS, (py + 2) * SS), fill=DOOR)
     mx, my = P(*s.pos[:2])

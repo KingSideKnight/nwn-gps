@@ -26,7 +26,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import panel
+from . import maps, panel
+from .resources import Resources
 from .db import DATA_DIR, Store
 from .hud import read_target, resolve_target, set_target
 from .memory import MODULEENTRY32W, TH32CS_SNAPMODULE, k32
@@ -225,6 +226,7 @@ class InGame:
         self.injected_pid, self.last_status, self.last_key, self.last_publish = None, None, None, 0.0
         self.visible = True
         self.arrived_at = None
+        self.maps, self.map_img = None, None
 
     def ensure_dll(self, pid):
         loaded = our_modules(pid)
@@ -278,6 +280,26 @@ class InGame:
             else:
                 log(f"unknown event {t} {code}")
 
+    def area_map(self, snap):
+        """Tile-art map of the current area (from live memory, else the recorded layout)."""
+        try:
+            if self.maps is None:
+                self.maps = maps.Maps(Resources())
+            tiles = maps.read_tiles(self.session.mem, snap.area_ptr, *snap.size) if snap.size else None
+            tileset, w, h = snap.tileset, *(snap.size or (0, 0))
+            if not tiles:
+                rec = self.store.tiles(snap.area)
+                if not rec:
+                    return None
+                tileset, w, h, tiles = rec
+            t0 = time.time()
+            img = self.maps.image(tileset, w, h, tiles)
+            log(f"map: {snap.area_name} ({w}x{h} {tileset}) in {time.time() - t0:.2f}s")
+            return img
+        except Exception as e:     # a map is a nice-to-have: never break navigation over it
+            log(f"map unavailable for {snap.area}: {e!r}")
+            return None
+
     def auto_clear(self, g):
         """Clear the destination once you've been there for a few seconds."""
         if g and g.status == "ARRIVED":
@@ -309,6 +331,7 @@ class InGame:
         if snap.state == IN_GAME and snap.area != self.pois_area:
             self.pois = self.store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (snap.area,)).fetchall()
             self.pois_area = snap.area
+            self.map_img = self.area_map(snap)
         g = self.nav.update(snap) if self.nav else None
         self.auto_clear(g)
         if self.picker.open:
@@ -320,7 +343,7 @@ class InGame:
                    (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)
         if key != self.last_key or time.time() - self.last_publish > 1.0:
             img = (panel.render_picker(self.picker, self.store.area_name) if self.picker.open
-                   else panel.render(snap, g, self.pois, snap.size))
+                   else panel.render(snap, g, self.pois, snap.size, self.map_img))
             self.shm.publish(img)
             self.last_key, self.last_publish = key, time.time()
         st = self.shm.status()

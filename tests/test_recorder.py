@@ -38,6 +38,7 @@ def run(script):
     tmp = tempfile.mkdtemp()
     with mock.patch.object(dbmod, "DATA_DIR", Path(tmp)), \
          mock.patch.object(R.Recorder, "record_pois", lambda self, s: None), \
+         mock.patch.object(R.maps, "read_tiles", lambda *a: None), \
          mock.patch.object(R, "log", lambda m: None):
         rec = R.Recorder()
         rec.session = FakeSession(script)
