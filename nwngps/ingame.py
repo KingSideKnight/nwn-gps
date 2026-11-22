@@ -6,6 +6,7 @@ In the game:
   Ctrl+Shift+F   destination picker (type to search, Up/Down, Enter, Esc)
   Ctrl+Shift+X   clear the destination (it also clears itself 10 s after you arrive)
   Ctrl+Shift+G   show / hide the panel
+  Ctrl+Shift+M   full-screen world map (press again to close)
   Ctrl+Shift + drag the panel with the left mouse button to move it (position is saved)
 
 Loads the DLL from native/build into the running game (no game files change;
@@ -32,7 +33,8 @@ from .db import DATA_DIR, Store
 from .hud import read_target, resolve_target, set_target
 from .memory import MODULEENTRY32W, TH32CS_SNAPMODULE, k32
 from .nav import Navigator
-from .picker import EV_CHAR, EV_CLEAR, EV_KEY, EV_MOVED, EV_OPEN, EV_TOGGLE, Picker
+from .fullmap import FullMap, frame_size
+from .picker import EV_CHAR, EV_CLEAR, EV_FULLMAP, EV_KEY, EV_MOVED, EV_OPEN, EV_TOGGLE, Picker
 
 AUTO_CLEAR_AFTER = 10.0   # seconds standing at the destination before it clears itself
 KEY_NAMES = {0x0D: "Enter", 0x1B: "Esc", 0x26: "Up", 0x28: "Down", 0x08: "Backspace", 0x2E: "Delete",
@@ -42,14 +44,15 @@ from .session import IN_GAME, Session
 BUILD = Path(__file__).resolve().parent.parent / "native" / "build"
 RUNTIME = DATA_DIR / "runtime"
 DLL_PREFIX = "nwngps_gl"
-DLL_VERSION = 2
+DLL_VERSION = 3
 
-SHM_NAME = "nwngps_overlay_v2"
+SHM_NAME = "nwngps_overlay_v3"
 MAGIC = 0x5350474E
-MAX_W, MAX_H, HDR = 640, 1024, 2048
+MAX_W, MAX_H, HDR = 2048, 2048, 2048
 SHM_SIZE = HDR + MAX_W * MAX_H * 4
-LEGACY_SHM = ("nwngps_overlay", 192 + 640 * 1024 * 4)     # v1 DLL
-FLAG_VISIBLE, FLAG_UNLOAD = 1, 2
+LEGACY_SHM = [("nwngps_overlay", 192 + 640 * 1024 * 4),          # v1 DLL
+              ("nwngps_overlay_v2", 2048 + 640 * 1024 * 4)]      # v2 DLL
+FLAG_VISIBLE, FLAG_UNLOAD, FLAG_FULLSCREEN = 1, 2, 4
 O_SEQ, O_W, O_H, O_OFFX, O_OFFY, O_ANCHOR, O_FLAGS = 8, 12, 16, 20, 24, 28, 32
 O_STATE, O_FRAMES, O_VIEW_W, O_VIEW_H = 36, 40, 44, 48
 O_DLLVER, O_CAPTURING, O_EVHEAD, O_MSG, O_EVENTS = 52, 56, 60, 64, 192
@@ -201,18 +204,21 @@ class Shm:
 def unload_old(pid, shm):
     """Ask any loaded copy of our DLL (v1 or older v2) to unload; wait until it's gone."""
     shm.set_flags(FLAG_UNLOAD)
-    try:
-        legacy = mmap.mmap(-1, LEGACY_SHM[1], tagname=LEGACY_SHM[0])
-        flags = struct.unpack_from("<I", legacy, 32)[0]
-        struct.pack_into("<I", legacy, 32, flags | FLAG_UNLOAD)
-    except OSError:
-        legacy = None
+    legacy = []
+    for name, size in LEGACY_SHM:      # older DLL versions listen on their own shared memory
+        try:
+            m = mmap.mmap(-1, size, tagname=name)
+            flags = struct.unpack_from("<I", m, 32)[0]
+            struct.pack_into("<I", m, 32, flags | FLAG_UNLOAD)
+            legacy.append(m)
+        except OSError:
+            pass
     for _ in range(60):
         if not our_modules(pid):
             break
         time.sleep(0.1)
-    if legacy:
-        legacy.close()
+    for m in legacy:
+        m.close()
     shm.set_flags(FLAG_VISIBLE)
     return not our_modules(pid)
 
@@ -227,6 +233,14 @@ class InGame:
         self.visible = True
         self.arrived_at = None
         self.maps, self.map_img = None, None
+        self.fullmap, self.fullmap_r, self.last_img = False, None, None
+
+    def apply_flags(self):
+        """Visible when the panel is on, or the picker / full map is open; full screen for the map."""
+        f = FLAG_VISIBLE if (self.visible or self.picker.open or self.fullmap) else 0
+        if self.fullmap and not self.picker.open:
+            f |= FLAG_FULLSCREEN
+        self.shm.set_flags(f)
 
     def ensure_dll(self, pid):
         loaded = our_modules(pid)
@@ -249,8 +263,17 @@ class InGame:
         for t, code, _mods in self.shm.events():
             if t == EV_TOGGLE:
                 self.visible = not self.visible
-                self.shm.set_flags(FLAG_VISIBLE if self.visible else 0)
+                self.apply_flags()
                 log(f"hotkey: panel {'shown' if self.visible else 'hidden'}")
+            elif t == EV_FULLMAP:
+                self.fullmap = not self.fullmap
+                if self.fullmap:
+                    if self.maps is None:
+                        self.maps = maps.Maps(Resources())
+                    self.fullmap_r = self.fullmap_r or FullMap(self.store, self.maps)
+                    self.fullmap_r.rebuild()
+                self.apply_flags()
+                log(f"hotkey: full map {'open' if self.fullmap else 'closed'}")
             elif t == EV_CLEAR:
                 log("hotkey: clear destination")
                 set_target(None)
@@ -261,7 +284,7 @@ class InGame:
                     f"+{pos['off_x']},{pos['off_y']} (saved)")
             elif t == EV_OPEN:
                 self.picker.start(has_destination=self.nav is not None)
-                self.shm.set_flags(FLAG_VISIBLE)
+                self.apply_flags()
                 log(f"picker opened ({len(self.picker.results)} entries)")
             elif t in (EV_CHAR, EV_KEY):
                 if t == EV_KEY:
@@ -275,8 +298,7 @@ class InGame:
                         set_target(None, pick=pick)
                     elif action == "clear":
                         set_target(None)
-                    if not self.visible:
-                        self.shm.set_flags(0)
+                    self.apply_flags()
             else:
                 log(f"unknown event {t} {code}")
 
@@ -332,20 +354,31 @@ class InGame:
             self.pois = self.store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (snap.area,)).fetchall()
             self.pois_area = snap.area
             self.map_img = self.area_map(snap)
+            if self.fullmap_r:
+                self.fullmap_r.rebuild()          # the recorder may have added areas / links
         g = self.nav.update(snap) if self.nav else None
         self.auto_clear(g)
+        full = self.fullmap and not self.picker.open and snap.state == IN_GAME
         if self.picker.open:
             key = ("picker", self.picker.query, self.picker.sel, len(self.picker.results))
         else:
-            key = (snap.state, snap.area, len(self.pois),
+            key = (full, snap.state, snap.area, len(self.pois),
                    tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                    tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
                    (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)
-        if key != self.last_key or time.time() - self.last_publish > 1.0:
-            img = (panel.render_picker(self.picker, self.store.area_name) if self.picker.open
-                   else panel.render(snap, g, self.pois, snap.size, self.map_img))
+        if key != self.last_key:
+            if self.picker.open:
+                img = panel.render_picker(self.picker, self.store.area_name)
+            elif full:
+                size = frame_size(self.shm.u32(O_VIEW_W), self.shm.u32(O_VIEW_H))
+                img = self.fullmap_r.render(size, snap, g, self.nav, self.map_img)
+            else:
+                img = panel.render(snap, g, self.pois, snap.size, self.map_img)
             self.shm.publish(img)
-            self.last_key, self.last_publish = key, time.time()
+            self.last_img, self.last_key, self.last_publish = img, key, time.time()
+        elif time.time() - self.last_publish > 1.0 and self.last_img is not None:
+            self.shm.publish(self.last_img)       # heartbeat: the DLL hides the panel if updates stop
+            self.last_publish = time.time()
         st = self.shm.status()
         if self.last_status is None or st[0] != self.last_status[0] or st[2] != self.last_status[2]:
             log(f"DLL v{st[3]}: {STATES.get(st[0], st[0])}  frames={st[1]}  {st[2]}")

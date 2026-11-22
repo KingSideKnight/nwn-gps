@@ -55,6 +55,15 @@ class Maps:
         self.textures = {}
         MAP_DIR.mkdir(parents=True, exist_ok=True)
 
+    def is_interior(self, name):
+        """The tileset's [GENERAL] Interior flag (buildings, dungeons) - None if unknown."""
+        key = ("interior", name)
+        if key not in self.sets:
+            data = self.res.get(name, "set") if name else None
+            m = re.search(rb"^Interior=(\d)", data or b"", re.M)
+            self.sets[key] = (m.group(1) == b"1") if m else None
+        return self.sets[key]
+
     def tileset(self, name):
         if name not in self.sets:
             data = self.res.get(name, "set")

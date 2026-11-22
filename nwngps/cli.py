@@ -104,6 +104,21 @@ def main():
                 print(f"[{h['kind']:4}] {h['name']}  — {store.area_name(h['area'])}{where}")
         elif cmd == "route":
             cmd_route(store, args)
+        elif cmd == "worldmap":
+            from . import maps as maps_mod, worldmap
+            from .resources import Resources
+            out = args[0] if args else "worldmap.png"
+            m = maps_mod.Maps(Resources())
+            w = worldmap.build(store, m)
+            clusters = sorted(set(w.cluster.values()))
+            for cid in clusters:
+                img, _ = worldmap.render(w, store, m, cid)
+                path = out if cid == 0 else out.replace(".png", f"_{cid}.png")
+                img.save(path)
+                members = [store.area_name(a) for a, c in w.cluster.items() if c == cid]
+                print(f"cluster {cid}: {len(members)} areas -> {path} ({img.width}x{img.height})")
+            print(f"interiors attached: {len(w.interiors)}; unplaced areas: "
+                  f"{len(set(r['resref'] for r in store.db.execute('SELECT resref FROM areas')) - set(w.origin) - {i[3] for i in w.interiors})}")
         elif cmd == "go":
             from .hud import set_target
             if not args or args == ["--stop"]:

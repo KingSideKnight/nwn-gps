@@ -124,7 +124,7 @@ def render_picker(picker, area_name):
     return img.resize((W, H), Image.LANCZOS)
 
 
-HOTKEYS = [("F", "Search"), ("X", "Clear"), ("G", "Hide")]
+HOTKEYS = [("F", "Search"), ("X", "Clear"), ("M", "Map"), ("G", "Hide")]
 
 
 def render(snap, g, pois, area_size=None, map_img=None):

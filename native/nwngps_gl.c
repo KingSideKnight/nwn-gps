@@ -8,7 +8,8 @@
  * and restoring all OpenGL state it touches, then calls the real SwapBuffers.
  *
  * Keyboard (v2): the game window is subclassed. Ctrl+Shift+G toggles the panel,
- * Ctrl+Shift+X clears the destination, Ctrl+Shift+F opens the destination picker; while it is open every key goes to
+ * Ctrl+Shift+X clears the destination, Ctrl+Shift+M toggles the full-screen map (v3:
+ * FLAG_FULLSCREEN scales the image to the window), Ctrl+Shift+F opens the destination picker; while it is open every key goes to
  * the picker (events in the shared-memory ring) and none reaches the game.
  *
  * Unload: Python sets FLAG_UNLOAD; the hook frees its GL objects, puts the
@@ -23,15 +24,16 @@
 #include <string.h>
 
 /* ---- shared memory layout v2 (keep in sync with nwngps/ingame.py) ---- */
-#define DLL_VERSION 2u
-#define SHM_NAME L"nwngps_overlay_v2"
+#define DLL_VERSION 3u
+#define SHM_NAME L"nwngps_overlay_v3"
 #define SHM_MAGIC 0x5350474Eu /* 'NGPS' */
-#define MAX_W 640
-#define MAX_H 1024
+#define MAX_W 2048
+#define MAX_H 2048
 #define HDR_SIZE 2048
 #define SHM_SIZE (HDR_SIZE + MAX_W * MAX_H * 4)
 #define FLAG_VISIBLE 1u
 #define FLAG_UNLOAD 2u
+#define FLAG_FULLSCREEN 4u   /* scale the image to fit the whole game window (Ctrl+Shift+M) */
 #define GPS_EV_RING 64
 
 /* events DLL -> Python */
@@ -41,6 +43,7 @@
 #define EV_KEY 4u      /* code = virtual key (Up/Down/Enter/Esc/Backspace...) while capturing */
 #define EV_CLEAR 5u    /* Ctrl+Shift+X: clear the destination */
 #define EV_MOVED 6u    /* panel dropped after a Ctrl+Shift+drag; new anchor/offsets are in the header */
+#define EV_FULLMAP 7u  /* Ctrl+Shift+M: toggle the full-screen map */
 
 /* anchors: which screen corner the offsets are measured from */
 #define ANCHOR_TR 0u
@@ -268,7 +271,7 @@ static void draw_panel(HDC hdc) {
     GLboolean blend, depth, cull, scissor, stencil, srgb, mask[4];
     RECT rc;
     uint32_t w, h, fw = 0, fh = 0;
-    int vw, vh, x, y;
+    int vw, vh, x, y, dw, dh;
     HWND wnd = WindowFromDC(hdc);
     ULONGLONG now = GetTickCount64();
 
@@ -329,7 +332,15 @@ static void draw_panel(HDC hdc) {
         if (y > vh - (int)h) y = vh - (int)h;
         if (x < 0) x = 0;
         if (y < 0) y = 0;
-        g_px = x; g_py = y; g_vw = vw; g_vh = vh; g_drawn = 1;
+        dw = (int)w; dh = (int)h;
+        if (g_shm->flags & FLAG_FULLSCREEN) {
+            /* fit the whole window, keep the aspect ratio; not draggable in this mode */
+            float s = (float)vw / (float)w < (float)vh / (float)h ? (float)vw / (float)w : (float)vh / (float)h;
+            dw = (int)(w * s); dh = (int)(h * s);
+            x = (vw - dw) / 2; y = (vh - dh) / 2;
+        } else {
+            g_px = x; g_py = y; g_vw = vw; g_vh = vh; g_drawn = 1;
+        }
         gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glViewport(0, 0, vw, vh);
         glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glDisable(GL_SCISSOR_TEST);
@@ -343,7 +354,7 @@ static void draw_panel(HDC hdc) {
         gl.Uniform1i(g_u_tex, 0);
         gl.Uniform4f(g_u_rect,
                      2.0f * x / vw - 1.0f, 1.0f - 2.0f * y / vh,
-                     2.0f * (x + (int)w) / vw - 1.0f, 1.0f - 2.0f * (y + (int)h) / vh);
+                     2.0f * (x + dw) / vw - 1.0f, 1.0f - 2.0f * (y + dh) / vh);
         gl.BindVertexArray(g_vao);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         g_shm->dll_state = 3;
@@ -466,6 +477,7 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SYSKEYDOWN:
             if (ctrl && shift && wp == 'G') { push_event(EV_TOGGLE, 0); g_swallow_char = 1; return 0; }
             if (ctrl && shift && wp == 'X') { push_event(EV_CLEAR, 0); g_swallow_char = 1; return 0; }
+            if (ctrl && shift && wp == 'M') { push_event(EV_FULLMAP, 0); g_swallow_char = 1; return 0; }
             if (ctrl && shift && wp == 'F') {
                 if (!g_capturing) { set_capture(1); push_event(EV_OPEN, 0); }
                 g_swallow_char = 1;
