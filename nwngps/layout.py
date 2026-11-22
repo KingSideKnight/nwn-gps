@@ -17,8 +17,8 @@ G_APP_MANAGER = 0x12DF970                    # exported global RVA
 CHAIN_CLIENT_INTERNAL = [0x0, 0x8]           # CAppManager -> CClientExoApp -> internal
 INTERNAL_MODULE = 0x30                       # -> CNWCModule*
 MODULE_CURRENT_AREA = 0xF8                   # -> CNWCArea*
-INTERNAL_PLAYER_HOLDER = 0x640               # -> unknown object (player?)
-HOLDER_CREATURE = 0xE8                       # -> CNWCCreature* (our character)
+INTERNAL_PLAYER_ID = 0x48                    # u32 our creature's object id (0xFFFFFFF6 seen) -> object table
+# (the old +0x640 -> +0xE8 chain moved between sessions; don't use it)
 
 # CNWCObject common header
 OBJ_ID = 0x08          # uint32 client object id
@@ -53,4 +53,6 @@ DOOR_TAG = 0x1C8       # char*
 
 # CNWCModule
 MODULE_NAME = 0x18     # char*
-MODULE_NWSYNC_URL = 0xB0
+MODULE_NWSYNC_URL = 0xB0   # shared by all servers of one world (e.g. all Arelith servers)
+MODULE_SERVER_NAME = 0xD8  # e.g. "ARE_CitiesAndPlanes": identifies the server within the world
+MODULE_PLAYER_ID = 0x124   # u32 copy of our creature id

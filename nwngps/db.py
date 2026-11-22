@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS transitions (
 CREATE INDEX IF NOT EXISTS trans_from ON transitions(from_area);
 """
 
+# Columns added after the first schema; applied with ALTER TABLE when missing.
+MIGRATIONS = {
+    "areas": {"server": "TEXT"},
+    "transitions": {"from_server": "TEXT", "to_server": "TEXT",
+                    "kind": "TEXT DEFAULT 'walk'",       # walk | portal (server change)
+                    "confirmed": "INTEGER DEFAULT 1"},   # 0 = portal seen once across a menu visit
+}
+
+
+def db_name(world):
+    return "".join(c if c.isalnum() else "_" for c in world.lower())
+
 POI_MERGE_DIST = 2.0      # metres: same kind+name closer than this = same POI
 TRANS_MERGE_DIST = 5.0    # metres: same from/to areas with exits this close = same transition
 VIA_MAX_DIST = 6.0        # metres: a pin/door this close to an exit labels the transition
@@ -55,28 +67,40 @@ def dist(ax, ay, bx, by):
 
 
 class Store:
-    def __init__(self, module="arelith", path=None):
+    def __init__(self, world="nwnarelith.com", path=None):
         DATA_DIR.mkdir(exist_ok=True)
-        self.path = Path(path) if path else DATA_DIR / f"{module.lower()}.sqlite"
+        self.world = world
+        self.path = Path(path) if path else DATA_DIR / f"{db_name(world)}.sqlite"
         self.db = sqlite3.connect(self.path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        for table, cols in MIGRATIONS.items():
+            have = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            for col, decl in cols.items():
+                if col not in have:
+                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        self.db.commit()
+
+    @staticmethod
+    def worlds():
+        return sorted(p.stem for p in DATA_DIR.glob("*.sqlite")) if DATA_DIR.exists() else []
 
     def close(self):
         self.db.commit()
         self.db.close()
 
     # --- writes -------------------------------------------------------------
-    def upsert_area(self, resref, name, tileset=None, width=None, height=None, visit=False):
+    def upsert_area(self, resref, name, tileset=None, width=None, height=None, visit=False, server=None):
         now = time.time()
         self.db.execute(
-            """INSERT INTO areas(resref,name,tileset,width,height,first_seen,last_seen,visits)
-               VALUES(?,?,?,?,?,?,?,?)
+            """INSERT INTO areas(resref,name,tileset,width,height,first_seen,last_seen,visits,server)
+               VALUES(?,?,?,?,?,?,?,?,?)
                ON CONFLICT(resref) DO UPDATE SET
                  name=COALESCE(excluded.name,name), tileset=COALESCE(excluded.tileset,tileset),
                  width=COALESCE(excluded.width,width), height=COALESCE(excluded.height,height),
+                 server=COALESCE(excluded.server,server),
                  last_seen=excluded.last_seen, visits=visits+?""",
-            (resref, name, tileset, width, height, now, now, int(visit), int(visit)))
+            (resref, name, tileset, width, height, now, now, int(visit), server, int(visit)))
         self.db.commit()
 
     def upsert_poi(self, area, kind, name, tag, x, y, z):
@@ -101,18 +125,23 @@ class Store:
                 best = (score, r)
         return best[1] if best else None
 
-    def add_transition(self, from_area, fpos, to_area, tpos):
+    def add_transition(self, from_area, fpos, to_area, tpos, from_server=None, to_server=None,
+                       kind="walk", confirmed=True):
+        """Record (or re-confirm) an edge. Seeing an unconfirmed portal a second time confirms it."""
         now = time.time()
         for r in self.db.execute("SELECT * FROM transitions WHERE from_area=? AND to_area=?", (from_area, to_area)):
             if dist(r["from_x"], r["from_y"], fpos[0], fpos[1]) < TRANS_MERGE_DIST:
-                self.db.execute("UPDATE transitions SET count=count+1,last_seen=? WHERE id=?", (now, r["id"]))
+                self.db.execute("UPDATE transitions SET count=count+1, last_seen=?, confirmed=1 WHERE id=?",
+                                (now, r["id"]))
                 self.db.commit()
                 return r["id"], False
         via = self.nearest_poi(from_area, fpos[0], fpos[1])
         cur = self.db.execute(
-            """INSERT INTO transitions(from_area,from_x,from_y,from_z,to_area,to_x,to_y,to_z,via_poi,first_seen,last_seen)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-            (from_area, *fpos, to_area, *tpos, via["id"] if via else None, now, now))
+            """INSERT INTO transitions(from_area,from_x,from_y,from_z,to_area,to_x,to_y,to_z,via_poi,first_seen,last_seen,
+                                       from_server,to_server,kind,confirmed)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (from_area, *fpos, to_area, *tpos, via["id"] if via else None, now, now,
+             from_server, to_server, kind, int(confirmed)))
         self.db.commit()
         return cur.lastrowid, True
 
@@ -138,8 +167,9 @@ class Store:
             (like, like, limit)).fetchall()
         return list(areas) + list(pois)
 
-    def transitions(self):
-        return self.db.execute("SELECT * FROM transitions").fetchall()
+    def transitions(self, include_unconfirmed=False):
+        q = "SELECT * FROM transitions" + ("" if include_unconfirmed else " WHERE confirmed=1")
+        return self.db.execute(q).fetchall()
 
     def poi(self, pid):
         return self.db.execute("SELECT * FROM pois WHERE id=?", (pid,)).fetchone()

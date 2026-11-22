@@ -53,6 +53,21 @@ Field offsets live in `nwngps/layout.py`; `python -m nwngps.snapshot` prints cur
   entry pos in new). First edge: ir_coroutskwllhs (54.91,11.83) <-> cordortradehaus (54.98,33.79);
   the exit matched the "Mercantile Building" map pin (54.83,11.59) on the upper floor.
 
+### After a relog (same game process)
+- Area chain (module +0xF8) still works; the CNWCModule object is recreated.
+- The `internal+0x640 -> +0xE8` player chain broke (slot moved to +0x6E8). Replaced by:
+  player id at `internal+0x48` (also `module+0x124`), value 0xFFFFFFF6 both sessions,
+  resolved through the object table.
+- The object table moved (0x...a3040 -> 0x...a8040); validate it by resolving the area's ids (>=80%).
+  A first locate accepted a look-alike table that resolved only 1 id; validation fixed that.
+- Menu / character select: module present but name empty, area pointer 0, old creature freed.
+
+### Server identity
+- CNWCModule +0xB0 NWSync URL (http://nwsync.nwnarelith.com) is shared by all Arelith servers -> "world".
+- CNWCModule +0xD8 e.g. "ARE_CitiesAndPlanes" -> server within the world.
+- Connection address strings (game.arelith.com:5121, 207.246.92.7:5121) are in heap memory too.
+- The client internal object also holds the account name and CD key: never log or store those.
+
 ## Open questions
 - [x] Confirm the CNWCCreature found is the player (position changes when you walk)
 - [ ] Pointer path from the area to its object list (doors, pins, placeables) so we don't need scans

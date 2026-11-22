@@ -41,10 +41,15 @@ class ObjectTable:
                 for bref in mem.scan(struct.pack("<Q", node), align=8):
                     base = bref - (key % L.OBJTABLE_BUCKETS) * 8
                     t = cls(mem, base)
-                    if t.lookup(oid) == door:
+                    if t.lookup(oid) == door and t.coverage(ids) >= 0.8:
                         log(f"object table at 0x{base:x}")
                         return t
         return None
+
+    def coverage(self, ids, sample=40):
+        """Fraction of the given object ids this table resolves (validates the table)."""
+        ids = list(ids)[:sample]
+        return sum(1 for i in ids if self.lookup(i)) / len(ids) if ids else 0.0
 
 
 def _exo_list(mem, addr):

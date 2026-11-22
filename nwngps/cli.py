@@ -11,6 +11,7 @@ Without --from, `route` starts from where your character is right now (game must
 import json
 import math
 import sys
+import time
 
 from . import route as R
 from .db import Store
@@ -23,16 +24,17 @@ def direction(dx, dy):
 
 
 def current_position():
-    from .live import Live
-    from .memory import GameMemory
-    mem = GameMemory()
+    from .session import IN_GAME, Session
+    s = Session(log=lambda *a: None)
     try:
-        st = Live(mem).read()
+        for _ in range(40):                 # up to ~10 s (object table locate on first call)
+            snap = s.poll()
+            if snap.state == IN_GAME:
+                return snap.area, snap.pos
+            time.sleep(0.25)
     finally:
-        mem.close()
-    if not st or not st["pos"]:
-        sys.exit("can't read your position (are you logged in?)")
-    return st["area"], st["pos"]
+        s.close()
+    sys.exit(f"can't read your position (game state: {snap.state})")
 
 
 def resolve_destination(store, text):
@@ -72,8 +74,9 @@ def cmd_route(store, args):
         via = store.poi(t["via_poi"]) if t["via_poi"] else store.nearest_poi(t["from_area"], t["from_x"], t["from_y"])
         label = f'"{via["name"]}"' if via and via["name"] else f"exit at ({t['from_x']:.0f}, {t['from_y']:.0f})"
         dx, dy = t["from_x"] - pos[0], t["from_y"] - pos[1]
+        hop = f"  [server transfer {t['from_server']} -> {t['to_server']}]" if t["kind"] == "portal" else ""
         print(f" {i}. In {store.area_name(t['from_area'])}: go {direction(dx, dy)} ~{math.hypot(dx, dy):.0f} m "
-              f"to {label} -> {store.area_name(t['to_area'])}")
+              f"to {label} -> {store.area_name(t['to_area'])}{hop}")
         pos = (t["to_x"], t["to_y"])
     if goal_xy:
         dx, dy = goal_xy[0] - pos[0], goal_xy[1] - pos[1]
