@@ -31,8 +31,8 @@ AREA_OBJ_ID = 0x118    # uint32
 AREA_RESREF = 0x128    # char[16] inline
 AREA_TILESET = 0x150   # char[16] inline
 AREA_NAME = 0x238      # char* (CExoString)
-AREA_WIDTH = 0x2A0     # int32 tiles (unverified: 10x10 seen)
-AREA_HEIGHT = 0x2A4
+AREA_WIDTH = 0x0C      # int32 tiles (7x9 Mercantile Building, 15x12 Cordor Frontier)
+AREA_HEIGHT = 0x10     # (+0x2A0 was wrong: that's the size of a 10-entry list)
 
 AREA_PINS = 0x2B8      # CExoArrayList<CNWCMapPin*> {ptr, int size, int cap}
 AREA_OBJECT_IDS = 0x318  # CExoArrayList<OBJECT_ID>: every object in the area

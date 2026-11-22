@@ -22,28 +22,37 @@ class ObjectTable:
         return None
 
     @classmethod
-    def locate(cls, mem, area, log=print):
-        """Find the table from any live door of `area`: scan for door vtables, then
-        for a pointer to one of them; that pointer lives in a hash node whose
-        bucket reveals the table base. Slow (tens of seconds), done once per session."""
-        vt = struct.pack("<Q", mem.base + L.VTABLES["CNWCDoor"])
+    def locate(cls, mem, area, log=print, max_candidates=4):
+        """Find the table from any live object of `area` (door, placeable or creature):
+        scan for their vtables, then for a pointer to one of them; that pointer lives in
+        a hash node whose bucket reveals the table base. A few seconds; done once per
+        session or after a reconnect."""
+        kinds = ("CNWCDoor", "CNWCPlaceable", "CNWCCreature")
+        pats = [struct.pack("<Q", mem.base + L.VTABLES[k]) for k in kinds]
         ids = set(area_ids(mem, area))
+        if not ids:
+            return None
         log("locating object table (one-time scan)...")
-        for door in mem.scan(vt, align=8):
-            oid = mem.u32(door + L.OBJ_ID)
-            if mem.u64(door + L.OBJ_AREA) != area or oid not in ids:
-                continue
+        candidates = []
+        for _, obj in mem.scan_many(pats):
+            if mem.u64(obj + L.OBJ_AREA) == area and mem.u32(obj + L.OBJ_ID) in ids:
+                candidates.append(obj)
+                if len(candidates) >= max_candidates:
+                    break
+        for obj in candidates:
+            oid = mem.u32(obj + L.OBJ_ID)
             key = oid & 0x7FFFFFFF
-            for ref in mem.scan(struct.pack("<Q", door), align=8):
+            for ref in mem.scan(struct.pack("<Q", obj), align=8):
                 node = ref - L.NODE_OBJ
                 if mem.u32(node + L.NODE_KEY) != key:
                     continue
                 for bref in mem.scan(struct.pack("<Q", node), align=8):
                     base = bref - (key % L.OBJTABLE_BUCKETS) * 8
                     t = cls(mem, base)
-                    if t.lookup(oid) == door and t.coverage(ids) >= 0.8:
+                    if t.lookup(oid) == obj and t.coverage(ids) >= 0.8:
                         log(f"object table at 0x{base:x}")
                         return t
+        log(f"object table not found ({len(candidates)} candidate objects)")
         return None
 
     def coverage(self, ids, sample=40):

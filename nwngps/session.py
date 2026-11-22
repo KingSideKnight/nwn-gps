@@ -99,8 +99,10 @@ class Session:
             if self.table.coverage(objects.area_ids(m, area)) < 0.8:
                 self.table = None            # table moved (relog / reconnect)
         if not self.table and time.time() >= self.next_locate:
-            self.next_locate = time.time() + 5.0
             self.table = objects.ObjectTable.locate(m, area, log=self.log)
+            # back off 5 s, 10 s, 20 s ... up to 60 s while it keeps failing
+            self.locate_fails = 0 if self.table else getattr(self, "locate_fails", 0) + 1
+            self.next_locate = time.time() + min(60.0, 5.0 * 2 ** max(0, self.locate_fails - 1))
             if self.table:
                 cre = self.table.lookup(pid) if pid else None
                 if cre and m.u64(cre) == self.vt["CNWCCreature"]:
