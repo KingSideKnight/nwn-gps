@@ -33,9 +33,21 @@ CPanelAreaMap 0xe59210, CGuiMapPin 0xe4f978, CGuiMapSurface 0xe59108, CGuiAreaLo
 - Message *formats* can be learned from the exported server-side writers
   `CNWSMessage::SendServerToPlayer*` (same binary).
 
-## Open questions (need the game running, logged in)
-- [ ] CNWCArea fields: name, tag, resref, width/height, tileset, tile list
-- [ ] Player creature: which CNWCCreature is us; position (x,y,z) & facing offsets
-- [ ] Doors/triggers: transition flag + destination (probably server-only; may need to learn by observing area changes)
-- [ ] Map pins: CNWCMapPin fields (text, position) and where the list lives
+## Live findings (2026-11-22, Arelith, build 26c6e573 Oct 6 2025)
+Field offsets live in `nwngps/layout.py`; `python -m nwngps.snapshot` prints current state.
+- The game must NOT run as administrator (a normal-user process can't read an elevated one).
+- Client holds exactly one CNWCArea (the current area). Seen: 1 area, 1 creature, 7 doors,
+  2 map pins, 154 placeables, 0 triggers.
+- CNWCObject header: +0x08 object id, +0x30 CNWCArea*, +0x38 position xyz, +0x44 facing xyz.
+- CNWCArea: +0x118 id, +0x128 resref (char[16]), +0x150 tileset resref, +0x238 name (char*),
+  +0x2A0/+0x2A4 probably width/height in tiles (10x10 seen; positions 0..100 m fit).
+- CNWCMapPin: +0x178 text. Arelith puts pins at transitions ("Northern Outskirts").
+- CNWCDoor: +0x170 name (e.g. "The Vineyard Nymph"), +0x1C8 tag; door objects are 0x1E0 apart.
+- CNWCModule: +0x18 name "Arelith", +0xB0 NWSync URL.
+- Network traffic is unusable without hooks (see above).
+
+## Open questions
+- [ ] Confirm the CNWCCreature found is the player (position changes when you walk)
+- [ ] Area width/height confirmation + tile list (pointer near +0x298)
+- [ ] Doors/triggers: transition flag + destination (likely server-only; learn by observing area changes)
 - [ ] Stable path from g_pAppManager to current area / player (so no full-memory scan each time)
