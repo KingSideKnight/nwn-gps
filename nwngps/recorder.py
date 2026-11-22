@@ -143,4 +143,6 @@ class Recorder:
 
 
 if __name__ == "__main__":
+    from .single import single_instance
+    single_instance("recorder")
     Recorder().run()

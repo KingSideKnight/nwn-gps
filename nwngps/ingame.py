@@ -406,6 +406,8 @@ class InGame:
 
 
 def main():
+    from .single import single_instance
+    single_instance("ingame")
     if len(sys.argv) > 1:
         set_target(" ".join(sys.argv[1:]))
     InGame().run()

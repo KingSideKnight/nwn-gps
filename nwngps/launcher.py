@@ -27,6 +27,8 @@ def start(module, logname):
 
 
 def main():
+    from .single import single_instance
+    single_instance("launcher")
     print("NWN GPS: starting recorder and in-game GPS (Ctrl+C to stop both)")
     print("In game: Ctrl+Shift+F search  Ctrl+Shift+X clear  Ctrl+Shift+G hide  Ctrl+Shift+M full map")
     procs = {name: start(mod, mod.split(".")[1] + ".log") for name, mod in PARTS.items()}
