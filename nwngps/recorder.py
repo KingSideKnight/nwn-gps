@@ -68,6 +68,9 @@ def main():
                 entered_at, pois_at = now, 0.0
             last = st
             if now - entered_at > SETTLE and now - pois_at > RESCAN_POIS:
+                if table and not any(table.lookup(i) for i in objects.area_ids(mem, st["area_ptr"])[:20]):
+                    log("object table moved; locating again")
+                    table = None
                 if table is None:
                     table = objects.ObjectTable.locate(mem, st["area_ptr"], log=log)
                     if table is None:
