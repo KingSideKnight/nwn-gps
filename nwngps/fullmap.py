@@ -13,6 +13,7 @@ BG = (10, 13, 16, 225)
 FG, DIM, ROUTE, ME, GOLD = (232, 238, 242, 255), (125, 138, 148, 255), (76, 217, 100, 255), \
     (63, 193, 255, 255), (242, 201, 76, 255)
 HEADER, FOOTER, PAD = 56, 34, 24
+MAX_VIEW = 1200.0     # metres across: bigger clusters show a window this wide that follows you
 
 
 def frame_size(view_w, view_h, max_w=1600):
@@ -35,12 +36,6 @@ class FullMap:
     def rebuild(self):
         """Call when the database may have changed (area change)."""
         self.world = worldmap.build(self.store, self.maps)
-        self.cache = {}
-
-    def _cluster_img(self, cid):
-        if cid not in self.cache:
-            self.cache[cid] = worldmap.render(self.world, self.store, self.maps, cid, ppm=1.6)
-        return self.cache[cid]
 
     def render(self, size, snap, g, nav, area_map_img):
         W, H = size
@@ -52,13 +47,19 @@ class FullMap:
         box = (PAD, HEADER, W - PAD, H - FOOTER)
         if home is not None:
             cid = self.world.cluster[home]
-            src, P = self._cluster_img(cid)
             title = "World map"
             here = self.world.to_world(home, *(snap.pos[:2] if hx is None else (hx, hy)))
-            to_px = self._fit(img, src, box)
+            view = self._view(cid, here, (box[2] - box[0]) / (box[3] - box[1]))
+            src, P = worldmap.render_view(self.world, self.store, self.maps, cid, view,
+                                          box[2] - box[0], box[3] - box[1])
+            img.alpha_composite(src, (box[0], box[1]))
+            to_px = lambda x, y: (box[0] + x, box[1] + y)       # noqa: E731
             me = to_px(*P(*here))
             route = self._route_points(snap, nav, P, to_px)
             inside = None if hx is None else snap.area_name
+            if view != self.world.bounds(cid):
+                _text(d, (box[2] - 8, box[3] - 8), f"{view[2] - view[0]:.0f} m view, following you", 8, DIM,
+                      anchor="rs")
         else:                                              # area not linked yet: its own map
             title = "Area map (not linked to the world map yet)"
             me, route, inside = self._area_only(img, snap, area_map_img, box), [], None
@@ -81,6 +82,18 @@ class FullMap:
             _text(d, (PAD, H - 12), f"To {g.dest_name}: {g.line1}"[:140], 9, FG, anchor="ls")
         _text(d, (W - PAD, H - 12), "Ctrl+Shift+M  close map", 9, DIM, anchor="rs")
         return img
+
+    def _view(self, cid, here, aspect):
+        """Whole cluster if it fits in MAX_VIEW metres, else a MAX_VIEW window on you (clamped)."""
+        x0, y0, x1, y1 = self.world.bounds(cid)
+        if x1 - x0 <= MAX_VIEW and y1 - y0 <= MAX_VIEW / aspect:
+            return (x0, y0, x1, y1)
+        vw, vh = MAX_VIEW, MAX_VIEW / aspect
+
+        def clamp(c, lo, hi, span):
+            return (lo + hi) / 2 if hi - lo <= span else min(max(c, lo + span / 2), hi - span / 2)
+        cx, cy = clamp(here[0], x0, x1, vw), clamp(here[1], y0, y1, vh)
+        return (cx - vw / 2, cy - vh / 2, cx + vw / 2, cy + vh / 2)
 
     @staticmethod
     def _fit(img, src, box):

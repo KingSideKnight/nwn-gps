@@ -19,6 +19,21 @@ from .db import DATA_DIR
 
 MAP_DIR = DATA_DIR / "maps"
 TILE_PX = 32
+CACHE_MAX_BYTES = 300 * 1024 * 1024    # cached area images are rebuilt on demand, so cap the folder
+
+
+def prune_cache(max_bytes=CACHE_MAX_BYTES):
+    """Delete least-recently-used cached map images until the folder fits in max_bytes."""
+    files = sorted(MAP_DIR.glob("*.png"), key=lambda p: max(p.stat().st_atime, p.stat().st_mtime))
+    total = sum(p.stat().st_size for p in files)
+    removed = 0
+    for p in files:
+        if total <= max_bytes:
+            break
+        total -= p.stat().st_size
+        p.unlink(missing_ok=True)
+        removed += 1
+    return removed
 
 
 def read_tiles(mem, area, w, h):
@@ -54,6 +69,7 @@ class Maps:
         self.sets = {}
         self.textures = {}
         MAP_DIR.mkdir(parents=True, exist_ok=True)
+        prune_cache()
 
     def is_interior(self, name):
         """The tileset's [GENERAL] Interior flag (buildings, dungeons) - None if unknown."""
@@ -92,6 +108,7 @@ class Maps:
         """North-up RGBA map of the area (w*32 x h*32), cached on disk by content."""
         path = MAP_DIR / f"{self.key(tileset, w, h, tiles)}.png"
         if path.exists():
+            path.touch()                       # Windows doesn't always update access times: mark it used
             return Image.open(path).convert("RGBA")
         ids = self.tileset(tileset)
         img = Image.new("RGBA", (w * TILE_PX, h * TILE_PX), (0, 0, 0, 0))

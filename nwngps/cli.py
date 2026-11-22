@@ -5,6 +5,9 @@
   python -m nwngps.cli find <text>
   python -m nwngps.cli route <destination text> [--from <area resref>]
   python -m nwngps.cli go <destination text> | --stop     set the in-game HUD's destination
+  python -m nwngps.cli worldmap [out.png]                 export the stitched world map
+  python -m nwngps.cli export [file.sqlite]               copy of your map database to share
+  python -m nwngps.cli merge <their.sqlite> [--dry-run]   merge a friend's database (backs yours up first)
   python -m nwngps.cli import-jsonl <transitions.jsonl>
 
 Without --from, `route` starts from where your character is right now (game must be running).
@@ -13,6 +16,7 @@ import json
 import math
 import sys
 import time
+from pathlib import Path
 
 from . import route as R
 from .db import Store
@@ -119,7 +123,32 @@ def main():
                 print(f"cluster {cid}: {len(members)} areas -> {path} ({img.width}x{img.height})")
             print(f"interiors attached: {len(w.interiors)}; unplaced areas: "
                   f"{len(set(r['resref'] for r in store.db.execute('SELECT resref FROM areas')) - set(w.origin) - {i[3] for i in w.interiors})}")
-        elif cmd == "go":
+        elif cmd == "export":
+            dest = args[0] if args else f"{store.path.stem}-share-{time.strftime('%Y%m%d')}.sqlite"
+            print(f"exported {store.stats()} to {store.export(dest)}")
+        elif cmd == "merge":
+            if not args:
+                sys.exit("usage: cli merge <their.sqlite> [--dry-run]")
+            other = args[0]
+            if Path(other).resolve() == store.path.resolve():
+                sys.exit("that's your own database")
+            if "--dry-run" in args:
+                import tempfile
+                tmp = Path(tempfile.mkdtemp()) / "preview.sqlite"
+                store.export(tmp)
+                preview = Store(path=tmp)
+                try:
+                    print("dry run, nothing changed. Would add:", preview.merge(other))
+                finally:
+                    preview.close()
+                    tmp.unlink(missing_ok=True)
+            else:
+                b = store.backup("before-merge")
+                print(f"backup: {b}")
+                before = store.stats()
+                print("added:", store.merge(other))
+                print(f"{before} -> {store.stats()}")
+                print(f"to undo: stop the GPS, then copy the backup over {store.path}")
             from .hud import set_target
             if not args or args == ["--stop"]:
                 set_target(None)

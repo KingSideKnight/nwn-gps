@@ -16,10 +16,12 @@ def with_reverse_edges(transitions):
     """Recorded edges plus an assumed reverse for each one nobody has walked back yet.
     NWN transitions are almost always two-way and you arrive next to the way back."""
     edges = [dict(t) for t in transitions]
+    by_pair = {}                         # (from, to) -> edges: keeps this linear in the edge count
+    for e in edges:
+        by_pair.setdefault((e["from_area"], e["to_area"]), []).append(e)
     for t in list(edges):
-        covered = any(e["from_area"] == t["to_area"] and e["to_area"] == t["from_area"]
-                      and math.hypot(e["from_x"] - t["to_x"], e["from_y"] - t["to_y"]) < REVERSE_NEAR
-                      for e in edges)
+        covered = any(math.hypot(e["from_x"] - t["to_x"], e["from_y"] - t["to_y"]) < REVERSE_NEAR
+                      for e in by_pair.get((t["to_area"], t["from_area"]), ()))
         if not covered:
             r = dict(t)
             r.update(from_area=t["to_area"], from_x=t["to_x"], from_y=t["to_y"],
@@ -30,12 +32,19 @@ def with_reverse_edges(transitions):
     return edges
 
 
-def plan(transitions, start_area, start_xy, goal_area, goal_xy=None, assume_reverse=True):
-    """Return list of transition rows (dicts) to follow, or None if unreachable."""
+def edge_index(transitions, assume_reverse=True):
+    """Prepared graph for plan(): {from_area: [edge, ...]}. Build once, reuse until the data changes."""
     edges = with_reverse_edges(transitions) if assume_reverse else [dict(t) for t in transitions]
     by_area = {}
     for t in edges:
         by_area.setdefault(t["from_area"], []).append(t)
+    return by_area
+
+
+def plan(transitions, start_area, start_xy, goal_area, goal_xy=None, assume_reverse=True, index=None):
+    """Return list of transition rows (dicts) to follow, or None if unreachable.
+    Pass `index` (from edge_index) to skip rebuilding the graph."""
+    by_area = index if index is not None else edge_index(transitions, assume_reverse)
 
     start = (start_area, round(start_xy[0], 1), round(start_xy[1], 1))
     best = {start: 0.0}

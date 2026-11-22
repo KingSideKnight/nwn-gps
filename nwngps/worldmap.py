@@ -134,7 +134,83 @@ def _font(size, bold=False):
     return ImageFont.load_default()
 
 
+_art_cache = {}            # (area, w_px, h_px) -> scaled tile art (bounded LRU)
+ART_CACHE_MAX = 96
+
+
+def _area_art(store, maps, area, wpx, hpx):
+    key = (area, wpx, hpx)
+    if key in _art_cache:
+        _art_cache[key] = _art_cache.pop(key)        # most recently used last
+        return _art_cache[key]
+    rec = store.tiles(area)
+    art = None
+    if rec and maps:
+        tileset, tw, th, tiles = rec
+        art = maps.image(tileset, tw, th, tiles).resize((wpx, hpx), Image.LANCZOS)
+    _art_cache[key] = art
+    while len(_art_cache) > ART_CACHE_MAX:
+        _art_cache.pop(next(iter(_art_cache)))
+    return art
+
+
+def render_view(world, store, maps, cid, view, out_w, out_h):
+    """Draw only the part of cluster `cid` inside `view` = (x0, y0, x1, y1) world metres, at
+    out_w x out_h pixels. Cost depends on what's visible, not on how big the world is.
+    Returns (image, world->pixel function)."""
+    vx0, vy0, vx1, vy1 = view
+    ppm = min(out_w / (vx1 - vx0), out_h / (vy1 - vy0))
+    ox = (out_w - (vx1 - vx0) * ppm) / 2
+    oy = (out_h - (vy1 - vy0) * ppm) / 2
+    img = Image.new("RGBA", (out_w, out_h), (14, 18, 22, 255))
+    d = ImageDraw.Draw(img)
+
+    def P(wx, wy):
+        return (ox + (wx - vx0) * ppm, oy + (vy1 - wy) * ppm)
+
+    names = []
+    for a, c in world.cluster.items():
+        if c != cid:
+            continue
+        (ax, ay), (w_m, h_m) = world.origin[a], world.size[a]
+        if ax > vx1 or ax + w_m < vx0 or ay > vy1 or ay + h_m < vy0:
+            continue                                  # not visible
+        left, top = P(ax, ay + h_m)
+        right, bottom = P(ax + w_m, ay)
+        wpx, hpx = max(1, round(right - left)), max(1, round(bottom - top))
+        art = _area_art(store, maps, a, wpx, hpx) if wpx * hpx < 16_000_000 else None
+        if art is not None:
+            img.alpha_composite(art, (round(left), round(top))) if left >= 0 and top >= 0 else \
+                img.paste(art, (round(left), round(top)), art)
+        else:
+            d.rectangle((left, top, right, bottom), fill=(30, 38, 46, 255))
+            d.text(((left + right) / 2, (top + bottom) / 2 + 16), "map appears after your next visit",
+                   font=_font(11), fill=(110, 122, 132, 255), anchor="mm")
+        d.rectangle((left, top, right, bottom), outline=(90, 110, 125, 255), width=2)
+        names.append(((left + right) / 2, max(top + 14, 14), short_name(store.area_name(a))))
+    labelled = set()
+    for parent, x, y, inner in world.interiors:
+        if world.cluster.get(parent) != cid or (parent, round(x), round(y)) in labelled:
+            continue
+        labelled.add((parent, round(x), round(y)))
+        px, py = P(*world.to_world(parent, x, y))
+        if not (0 <= px < out_w and 0 <= py < out_h):
+            continue
+        d.rectangle((px - 4, py - 4, px + 4, py + 4), fill=(242, 201, 76, 255), outline=(0, 0, 0, 255))
+        label, f = short_name(store.area_name(inner)), _font(11)
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            d.text((px + 7 + dx, py + dy), label, font=f, fill=(0, 0, 0, 255), anchor="lm")
+        d.text((px + 7, py), label, font=f, fill=(242, 201, 76, 255), anchor="lm")
+    f = _font(14, True)
+    for cx, ty, name in names:
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)):
+            d.text((cx + dx, ty + dy), name, font=f, fill=(0, 0, 0, 255), anchor="mt")
+        d.text((cx, ty), name, font=f, fill=(232, 238, 242, 255), anchor="mt")
+    return img, P
+
+
 def render(world, store, maps, cid, ppm=1.6, margin=40):
+    """Whole cluster as one image (for `cli worldmap` export)."""
     """Image of one cluster at `ppm` pixels per metre. Returns (image, world->pixel function)."""
     x0, y0, x1, y1 = world.bounds(cid)
     W = int((x1 - x0) * ppm) + 2 * margin

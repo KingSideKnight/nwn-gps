@@ -79,8 +79,11 @@ class Store:
         DATA_DIR.mkdir(exist_ok=True)
         self.world = world
         self.path = Path(path) if path else DATA_DIR / f"{db_name(world)}.sqlite"
-        self.db = sqlite3.connect(self.path)
+        self.db = sqlite3.connect(self.path, timeout=10)
         self.db.row_factory = sqlite3.Row
+        # WAL: the recorder writes while the GPS/CLI read, and commits stay cheap (big merges)
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
         for table, cols in MIGRATIONS.items():
             have = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
@@ -192,6 +195,71 @@ class Store:
 
     def poi(self, pid):
         return self.db.execute("SELECT * FROM pois WHERE id=?", (pid,)).fetchone()
+
+    # --- sharing ------------------------------------------------------------
+    def export(self, dest):
+        """Consistent copy of this database (safe while the recorder is writing)."""
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        out = sqlite3.connect(dest)
+        with out:
+            self.db.backup(out)
+        out.close()
+        return dest
+
+    def backup(self, tag="backup"):
+        return self.export(DATA_DIR / "backups" / f"{self.path.stem}-{tag}-{time.strftime('%Y%m%d-%H%M%S')}.sqlite")
+
+    def merge(self, other_path):
+        """Merge another player's database into this one. Areas fill in missing details, POIs and
+        transitions are de-duplicated by distance, tile layouts are added where we have none.
+        Returns counts of what was added. (For a dry run, merge into an export() copy.)"""
+        other = sqlite3.connect(f"file:{Path(other_path)}?mode=ro", uri=True)
+        other.row_factory = sqlite3.Row
+        tables = {r[0] for r in other.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "areas" not in tables:
+            raise ValueError(f"{other_path} is not an NWN GPS database")
+        added = {"areas": 0, "areas_updated": 0, "pois": 0, "transitions": 0, "transitions_seen_again": 0,
+                 "tile_layouts": 0}
+        try:
+            for r in other.execute("SELECT * FROM areas"):
+                r = dict(r)
+                mine = self.area(r["resref"])
+                if mine is None:
+                    added["areas"] += 1
+                elif any(mine[k] is None and r.get(k) is not None for k in ("name", "tileset", "width", "height")):
+                    added["areas_updated"] += 1
+                self.db.execute(
+                    """INSERT INTO areas(resref,name,tileset,width,height,first_seen,last_seen,visits,server)
+                       VALUES(?,?,?,?,?,?,?,0,?)
+                       ON CONFLICT(resref) DO UPDATE SET
+                         name=COALESCE(name,excluded.name), tileset=COALESCE(tileset,excluded.tileset),
+                         width=COALESCE(width,excluded.width), height=COALESCE(height,excluded.height),
+                         server=COALESCE(server,excluded.server),
+                         first_seen=MIN(first_seen,excluded.first_seen)""",
+                    (r["resref"], r.get("name"), r.get("tileset"), r.get("width"), r.get("height"),
+                     r.get("first_seen"), r.get("last_seen"), r.get("server")))
+            before = self.stats()["pois"]
+            for r in other.execute("SELECT * FROM pois"):
+                self.upsert_poi(r["area"], r["kind"], r["name"], r["tag"], r["x"], r["y"], r["z"])
+            added["pois"] = self.stats()["pois"] - before
+            for r in other.execute("SELECT * FROM transitions"):
+                r = dict(r)
+                _, new = self.add_transition(r["from_area"], (r["from_x"], r["from_y"], r["from_z"]),
+                                             r["to_area"], (r["to_x"], r["to_y"], r["to_z"]),
+                                             r.get("from_server"), r.get("to_server"), r.get("kind") or "walk",
+                                             bool(r.get("confirmed", 1)))
+                added["transitions" if new else "transitions_seen_again"] += 1
+            if "area_tiles" in tables:
+                for r in other.execute("SELECT * FROM area_tiles"):
+                    if not self.db.execute("SELECT 1 FROM area_tiles WHERE resref=?", (r["resref"],)).fetchone():
+                        self.db.execute("INSERT INTO area_tiles(resref,tileset,width,height,tiles,seen) "
+                                        "VALUES(?,?,?,?,?,?)", tuple(r))
+                        added["tile_layouts"] += 1
+            self.db.commit()
+        finally:
+            other.close()
+        return added
 
     def stats(self):
         q = lambda t: self.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]

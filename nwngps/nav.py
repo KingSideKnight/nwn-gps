@@ -45,8 +45,16 @@ class Navigator:
         self.goal_xy = (dest["x"], dest["y"]) if dest["x"] is not None else None
         self.plan, self.plan_area, self.plan_t = None, None, 0.0
 
+    def _graph(self):
+        """Route graph, rebuilt only when the recorder has added or updated transitions."""
+        version = tuple(self.store.db.execute("SELECT COUNT(*), MAX(last_seen) FROM transitions").fetchone())
+        if version != getattr(self, "_graph_version", None):
+            self._graph_index = R.edge_index(self.store.transitions())
+            self._graph_version = version
+        return self._graph_index
+
     def _replan(self, snap):
-        self.plan = R.plan(self.store.transitions(), snap.area, snap.pos[:2], self.dest["area"], self.goal_xy)
+        self.plan = R.plan(None, snap.area, snap.pos[:2], self.dest["area"], self.goal_xy, index=self._graph())
         self.plan_area, self.plan_t = snap.area, time.time()
 
     def label(self, t):
