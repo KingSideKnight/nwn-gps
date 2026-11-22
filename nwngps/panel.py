@@ -10,7 +10,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .nav import compass
 
-W, H = 320, 500
+W, H = 320, 528
+LEGEND_Y = H - 40          # hotkey legend row (above the area/server footer)
 SS = 2                                  # supersampling factor
 MAP_Y, MAP_SIZE, ARROW_Y = 178, 300, 108
 BG = (16, 20, 24, 215)
@@ -36,6 +37,34 @@ def _arrow(d, cx, cy, r, deg, color):
     for px, py in ((0, -r), (r * 0.6, r * 0.7), (0, r * 0.35), (-r * 0.6, r * 0.7)):
         pts.append(((cx + px * math.cos(a) - py * math.sin(a)) * SS, (cy + px * math.sin(a) + py * math.cos(a)) * SS))
     d.polygon(pts, fill=color)
+
+
+KEY_BG, KEY_EDGE = (34, 44, 54, 255), (70, 86, 100, 255)
+
+
+def _legend(d, y, items, prefix=None):
+    """Hotkey chips centred on row y: [prefix +] [key] label  [key] label ..."""
+    fk, fl = font(8, True), font(8)
+    pad, gap = 4, 10
+    parts = []
+    if prefix:
+        parts.append(("text", prefix + " +"))
+    for key, label in items:
+        parts += [("key", key), ("text", label)]
+    widths = [d.textlength(t, font=fk if k == "key" else fl) / SS + (2 * pad if k == "key" else 0)
+              for k, t in parts]
+    total = sum(widths) + 4 * (len(parts) - 1) + gap * (len(items) - 1)
+    x = (W - total) / 2
+    for i, ((k, t), w) in enumerate(zip(parts, widths)):
+        if k == "key":
+            d.rounded_rectangle((x * SS, (y - 8) * SS, (x + w) * SS, (y + 8) * SS), radius=3 * SS,
+                                fill=KEY_BG, outline=KEY_EDGE, width=SS)
+            d.text(((x + w / 2) * SS, y * SS), t, font=fk, fill=FG, anchor="mm")
+        else:
+            d.text((x * SS, y * SS), t, font=fl, fill=DIM, anchor="lm")
+        x += w + 4
+        if k == "text" and i > 0 and i < len(parts) - 1:
+            x += gap
 
 
 def _text(d, x, y, s, size, color, bold=False, anchor="la", width=None):
@@ -89,16 +118,18 @@ def render_picker(picker, area_name):
         y += 44
         if y > H - 50:
             break
-    _text(d, W / 2, H - 14, "↑↓ choose   Enter go   Esc cancel", 8, DIM, anchor="ms")
+    _legend(d, H - 20, [("↑↓", "choose"), ("Enter", "go"), ("Esc", "cancel")])
     return img.resize((W, H), Image.LANCZOS)
 
 
-def render(snap, g, pois, area_size=None, hidden_hint=True):
+HOTKEYS = [("F", "Search"), ("X", "Clear"), ("G", "Hide")]
+
+
+def render(snap, g, pois, area_size=None):
     img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
-    if hidden_hint:
-        _text(d, W - 14, 14, "Ctrl+Shift+F", 7, DIM, anchor="ra")
+    _legend(d, LEGEND_Y, HOTKEYS, prefix="Ctrl+Shift")
     _text(d, 14, 12, (g.dest_name if g else "GPS")[:34], 11, FG, bold=True)
     if snap is None or snap.state != "IN_GAME":
         msg = {"NO_GAME": "Waiting for the game...", "MENU": "In menus", "LOADING": "Loading..."}.get(
@@ -108,7 +139,7 @@ def render(snap, g, pois, area_size=None, hidden_hint=True):
     if g:
         _guidance(d, g)
     else:
-        _text(d, 14, 40, "No destination. Press Ctrl+Shift+F to search.", 10, DIM, width=W - 28)
+        _text(d, 14, 40, "No destination. Press Ctrl+Shift+F to choose one.", 10, DIM, width=W - 28)
     _map(d, snap, g, pois, area_size)
     _text(d, 14, H - 12, (snap.area_name or snap.area or "")[:46], 8, DIM, anchor="ls")
     _text(d, W - 14, H - 12, (snap.server or "").replace("ARE_", ""), 8, DIM, anchor="rs")

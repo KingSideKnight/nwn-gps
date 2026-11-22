@@ -8,7 +8,7 @@
  * and restoring all OpenGL state it touches, then calls the real SwapBuffers.
  *
  * Keyboard (v2): the game window is subclassed. Ctrl+Shift+G toggles the panel,
- * Ctrl+Shift+F opens the destination picker; while it is open every key goes to
+ * Ctrl+Shift+X clears the destination, Ctrl+Shift+F opens the destination picker; while it is open every key goes to
  * the picker (events in the shared-memory ring) and none reaches the game.
  *
  * Unload: Python sets FLAG_UNLOAD; the hook frees its GL objects, puts the
@@ -39,6 +39,7 @@
 #define EV_OPEN 2u     /* Ctrl+Shift+F: picker opened, keys are now captured */
 #define EV_CHAR 3u     /* code = UTF-16 unit typed while capturing */
 #define EV_KEY 4u      /* code = virtual key (Up/Down/Enter/Esc/Backspace...) while capturing */
+#define EV_CLEAR 5u    /* Ctrl+Shift+X: clear the destination */
 
 typedef struct { uint32_t type, code, mods, pad; } ShmEvent;
 
@@ -408,6 +409,7 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
             if (ctrl && shift && wp == 'G') { push_event(EV_TOGGLE, 0); g_swallow_char = 1; return 0; }
+            if (ctrl && shift && wp == 'X') { push_event(EV_CLEAR, 0); g_swallow_char = 1; return 0; }
             if (ctrl && shift && wp == 'F') {
                 if (!g_capturing) { set_capture(1); push_event(EV_OPEN, 0); }
                 g_swallow_char = 1;

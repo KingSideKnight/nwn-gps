@@ -9,7 +9,7 @@ from .db import DATA_DIR
 
 VK_BACK, VK_TAB, VK_RETURN, VK_ESCAPE = 0x08, 0x09, 0x0D, 0x1B
 VK_PRIOR, VK_NEXT, VK_END, VK_HOME, VK_UP, VK_DOWN, VK_DELETE = 0x21, 0x22, 0x23, 0x24, 0x26, 0x28, 0x2E
-EV_TOGGLE, EV_OPEN, EV_CHAR, EV_KEY = 1, 2, 3, 4
+EV_TOGGLE, EV_OPEN, EV_CHAR, EV_KEY, EV_CLEAR = 1, 2, 3, 4, 5
 RECENT_FILE = DATA_DIR / "recent.json"
 MAX_RESULTS, MAX_RECENT = 8, 10
 CLEAR = {"kind": "clear", "name": "Clear destination", "area": None, "x": None, "y": None}

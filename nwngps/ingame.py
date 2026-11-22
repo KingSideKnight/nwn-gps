@@ -4,6 +4,7 @@
 
 In the game:
   Ctrl+Shift+F   destination picker (type to search, Up/Down, Enter, Esc)
+  Ctrl+Shift+X   clear the destination (it also clears itself 10 s after you arrive)
   Ctrl+Shift+G   show / hide the panel
 
 Loads the DLL from native/build into the running game (no game files change;
@@ -28,7 +29,11 @@ from .db import DATA_DIR, Store
 from .hud import read_target, resolve_target, set_target
 from .memory import MODULEENTRY32W, TH32CS_SNAPMODULE, k32
 from .nav import Navigator
-from .picker import EV_CHAR, EV_KEY, EV_OPEN, EV_TOGGLE, Picker
+from .picker import EV_CHAR, EV_CLEAR, EV_KEY, EV_OPEN, EV_TOGGLE, Picker
+
+AUTO_CLEAR_AFTER = 10.0   # seconds standing at the destination before it clears itself
+KEY_NAMES = {0x0D: "Enter", 0x1B: "Esc", 0x26: "Up", 0x28: "Down", 0x08: "Backspace", 0x2E: "Delete",
+             0x09: "Tab", 0x21: "PgUp", 0x22: "PgDn", 0x24: "Home", 0x23: "End"}
 from .session import IN_GAME, Session
 
 BUILD = Path(__file__).resolve().parent.parent / "native" / "build"
@@ -191,6 +196,7 @@ class InGame:
         self.nav, self.target, self.pois, self.pois_area = None, object(), [], None
         self.injected_pid, self.last_status, self.last_key, self.last_publish = None, None, None, 0.0
         self.visible = True
+        self.arrived_at = None
 
     def ensure_dll(self, pid):
         loaded = our_modules(pid)
@@ -214,19 +220,42 @@ class InGame:
             if t == EV_TOGGLE:
                 self.visible = not self.visible
                 self.shm.set_flags(FLAG_VISIBLE if self.visible else 0)
+                log(f"hotkey: panel {'shown' if self.visible else 'hidden'}")
+            elif t == EV_CLEAR:
+                log("hotkey: clear destination")
+                set_target(None)
             elif t == EV_OPEN:
                 self.picker.start(has_destination=self.nav is not None)
                 self.shm.set_flags(FLAG_VISIBLE)
+                log(f"picker opened ({len(self.picker.results)} entries)")
             elif t in (EV_CHAR, EV_KEY):
+                if t == EV_KEY:
+                    log(f"picker key {KEY_NAMES.get(code, hex(code))} (query {self.picker.query!r}, "
+                        f"selected {self.picker.sel})")
                 res = self.picker.handle(t, code)
                 if res:
                     action, pick = res
+                    log(f"picker: {action}" + (f" {pick['name']}" if pick else ""))
                     if action == "pick":
                         set_target(None, pick=pick)
                     elif action == "clear":
                         set_target(None)
                     if not self.visible:
                         self.shm.set_flags(0)
+            else:
+                log(f"unknown event {t} {code}")
+
+    def auto_clear(self, g):
+        """Clear the destination once you've been there for a few seconds."""
+        if g and g.status == "ARRIVED":
+            self.arrived_at = self.arrived_at or time.time()
+            g.line2 = f"Destination clears in {max(0, AUTO_CLEAR_AFTER - (time.time() - self.arrived_at)):.0f} s"
+            if time.time() - self.arrived_at >= AUTO_CLEAR_AFTER:
+                log("arrived; destination cleared")
+                set_target(None)
+                self.arrived_at = None
+        else:
+            self.arrived_at = None
 
     def update_target(self):
         tgt = read_target()
@@ -248,6 +277,7 @@ class InGame:
             self.pois = self.store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (snap.area,)).fetchall()
             self.pois_area = snap.area
         g = self.nav.update(snap) if self.nav else None
+        self.auto_clear(g)
         if self.picker.open:
             key = ("picker", self.picker.query, self.picker.sel, len(self.picker.results))
         else:
@@ -266,7 +296,8 @@ class InGame:
             self.last_status = st
 
     def run(self):
-        log("in-game GPS running (Ctrl+C to stop).  In game: Ctrl+Shift+F search, Ctrl+Shift+G hide")
+        log("in-game GPS running (Ctrl+C to stop).  In game: Ctrl+Shift+F search, "
+            "Ctrl+Shift+X clear, Ctrl+Shift+G hide")
         try:
             while True:
                 t0 = time.time()
