@@ -12,6 +12,14 @@ VTABLES = {
     "CNWCModule": 0xE44D18,
 }
 
+# Pointer chains (offsets applied as: p = *(p + off) for each)
+G_APP_MANAGER = 0x12DF970                    # exported global RVA
+CHAIN_CLIENT_INTERNAL = [0x0, 0x8]           # CAppManager -> CClientExoApp -> internal
+INTERNAL_MODULE = 0x30                       # -> CNWCModule*
+MODULE_CURRENT_AREA = 0xF8                   # -> CNWCArea*
+INTERNAL_PLAYER_HOLDER = 0x640               # -> unknown object (player?)
+HOLDER_CREATURE = 0xE8                       # -> CNWCCreature* (our character)
+
 # CNWCObject common header
 OBJ_ID = 0x08          # uint32 client object id
 OBJ_AREA = 0x30        # CNWCArea*
