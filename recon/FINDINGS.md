@@ -46,8 +46,16 @@ Field offsets live in `nwngps/layout.py`; `python -m nwngps.snapshot` prints cur
 - CNWCModule: +0x18 name "Arelith", +0xB0 NWSync URL.
 - Network traffic is unusable without hooks (see above).
 
+### Pointer chains (verified across 2 area transitions)
+- current area: `*g_pAppManager -> +0x0 (CClientExoApp) -> +0x8 (internal) -> +0x30 (CNWCModule) -> +0xF8 (CNWCArea)`
+- player creature: `... internal -> +0x640 (unknown holder) -> +0xE8 (CNWCCreature)`; position verified by walking.
+- `python -m nwngps.live --log file.jsonl` records area_change events (exit pos in old area,
+  entry pos in new). First edge: ir_coroutskwllhs (54.91,11.83) <-> cordortradehaus (54.98,33.79);
+  the exit matched the "Mercantile Building" map pin (54.83,11.59) on the upper floor.
+
 ## Open questions
-- [ ] Confirm the CNWCCreature found is the player (position changes when you walk)
+- [x] Confirm the CNWCCreature found is the player (position changes when you walk)
+- [ ] Pointer path from the area to its object list (doors, pins, placeables) so we don't need scans
 - [ ] Area width/height confirmation + tile list (pointer near +0x298)
 - [ ] Doors/triggers: transition flag + destination (likely server-only; learn by observing area changes)
 - [ ] Stable path from g_pAppManager to current area / player (so no full-memory scan each time)
