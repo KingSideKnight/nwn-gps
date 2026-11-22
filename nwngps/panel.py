@@ -10,8 +10,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .nav import compass
 
-W, H = 320, 528
-LEGEND_Y = H - 40          # hotkey legend row (above the area/server footer)
+W, H = 320, 544
+LEGEND_Y = H - 56          # hotkey legend row
+DRAG_HINT_Y = H - 34       # "Ctrl+Shift + drag to move" (above the area/server footer)
 SS = 2                                  # supersampling factor
 MAP_Y, MAP_SIZE, ARROW_Y = 178, 300, 108
 BG = (16, 20, 24, 215)
@@ -130,6 +131,7 @@ def render(snap, g, pois, area_size=None):
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
     _legend(d, LEGEND_Y, HOTKEYS, prefix="Ctrl+Shift")
+    _text(d, W / 2, DRAG_HINT_Y, "Ctrl+Shift + drag the panel to move it", 7, DIM, anchor="mm")
     _text(d, 14, 12, (g.dest_name if g else "GPS")[:34], 11, FG, bold=True)
     if snap is None or snap.state != "IN_GAME":
         msg = {"NO_GAME": "Waiting for the game...", "MENU": "In menus", "LOADING": "Loading..."}.get(

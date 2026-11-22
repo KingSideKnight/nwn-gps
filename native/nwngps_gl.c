@@ -40,6 +40,13 @@
 #define EV_CHAR 3u     /* code = UTF-16 unit typed while capturing */
 #define EV_KEY 4u      /* code = virtual key (Up/Down/Enter/Esc/Backspace...) while capturing */
 #define EV_CLEAR 5u    /* Ctrl+Shift+X: clear the destination */
+#define EV_MOVED 6u    /* panel dropped after a Ctrl+Shift+drag; new anchor/offsets are in the header */
+
+/* anchors: which screen corner the offsets are measured from */
+#define ANCHOR_TR 0u
+#define ANCHOR_TL 1u
+#define ANCHOR_BR 2u
+#define ANCHOR_BL 3u
 
 typedef struct { uint32_t type, code, mods, pad; } ShmEvent;
 
@@ -47,8 +54,8 @@ typedef struct {
     uint32_t magic, version;
     volatile uint32_t seq;     /* seqlock: odd while Python writes */
     uint32_t width, height;
-    int32_t off_x, off_y;      /* margins from the anchor corner, pixels */
-    uint32_t anchor;           /* 0 = top-right, 1 = top-left */
+    volatile int32_t off_x, off_y;  /* margins from the anchor corner, pixels (DLL updates while dragging) */
+    volatile uint32_t anchor;       /* ANCHOR_TR / TL / BR / BL */
     volatile uint32_t flags;
     volatile uint32_t dll_state; /* 0 unloaded, 1 attached, 2 hooked, 3 drawing, 9 error */
     volatile uint32_t dll_frames;
@@ -135,6 +142,9 @@ static uint8_t *g_pixels;           /* local copy, MAX_W*MAX_H*4 */
 static uint32_t g_seen_seq = 0, g_tex_w = 0, g_tex_h = 0;
 static ULONGLONG g_last_update = 0;
 static int g_gl_ready = 0, g_gl_failed = 0, g_unloading = 0;
+/* where the panel was last drawn (client coordinates), for hit-testing drags */
+static volatile int g_px = -1, g_py = -1, g_vw = 0, g_vh = 0, g_drawn = 0;
+static int g_dragging = 0, g_drag_dx = 0, g_drag_dy = 0;
 static GLuint g_prog, g_vao, g_tex;
 static GLint g_u_rect, g_u_tex;
 
@@ -310,9 +320,16 @@ static void draw_panel(HDC hdc) {
 
     /* ---- draw (only if visible and Python is alive) ---- */
     w = g_tex_w; h = g_tex_h;
+    g_drawn = 0;
     if (w && h && (g_shm->flags & FLAG_VISIBLE) && now - g_last_update < 3000) {
-        x = g_shm->anchor == 1 ? g_shm->off_x : vw - (int)w - g_shm->off_x;
-        y = g_shm->off_y;
+        uint32_t a = g_shm->anchor;
+        x = (a == ANCHOR_TL || a == ANCHOR_BL) ? g_shm->off_x : vw - (int)w - g_shm->off_x;
+        y = (a == ANCHOR_TL || a == ANCHOR_TR) ? g_shm->off_y : vh - (int)h - g_shm->off_y;
+        if (x > vw - (int)w) x = vw - (int)w;   /* keep it on screen after resolution changes */
+        if (y > vh - (int)h) y = vh - (int)h;
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        g_px = x; g_py = y; g_vw = vw; g_vh = vh; g_drawn = 1;
         gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glViewport(0, 0, vw, vh);
         glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glDisable(GL_SCISSOR_TEST);
@@ -402,10 +419,49 @@ static void set_capture(int on) {
     if (g_shm) g_shm->capturing = (uint32_t)on;
 }
 
+/* Store a top-left position as offsets from the nearest screen corner. */
+static void set_position(int x, int y) {
+    int w = (int)g_tex_w, hh = (int)g_tex_h, right, bottom;
+    if (x > g_vw - w) x = g_vw - w;
+    if (y > g_vh - hh) y = g_vh - hh;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    right = x + w / 2 > g_vw / 2;
+    bottom = y + hh / 2 > g_vh / 2;
+    g_shm->off_x = right ? g_vw - w - x : x;
+    g_shm->off_y = bottom ? g_vh - hh - y : y;
+    g_shm->anchor = bottom ? (right ? ANCHOR_BR : ANCHOR_BL) : (right ? ANCHOR_TR : ANCHOR_TL);
+}
+
 static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (!g_unloading && g_shm) {
         int ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0;
+        int mx = (int)(short)LOWORD(lp), my = (int)(short)HIWORD(lp);
         switch (msg) {
+        case WM_LBUTTONDOWN:
+            if (ctrl && shift && g_drawn && mx >= g_px && mx < g_px + (int)g_tex_w &&
+                my >= g_py && my < g_py + (int)g_tex_h) {
+                g_dragging = 1;
+                g_drag_dx = mx - g_px;
+                g_drag_dy = my - g_py;
+                SetCapture(h);
+                return 0;   /* the game never sees this click */
+            }
+            break;
+        case WM_MOUSEMOVE:
+            if (g_dragging) { set_position(mx - g_drag_dx, my - g_drag_dy); return 0; }
+            break;
+        case WM_LBUTTONUP:
+            if (g_dragging) {
+                g_dragging = 0;
+                ReleaseCapture();
+                push_event(EV_MOVED, 0);
+                return 0;
+            }
+            break;
+        case WM_CAPTURECHANGED:
+            if (g_dragging) { g_dragging = 0; push_event(EV_MOVED, 0); }
+            break;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
             if (ctrl && shift && wp == 'G') { push_event(EV_TOGGLE, 0); g_swallow_char = 1; return 0; }

@@ -6,6 +6,7 @@ In the game:
   Ctrl+Shift+F   destination picker (type to search, Up/Down, Enter, Esc)
   Ctrl+Shift+X   clear the destination (it also clears itself 10 s after you arrive)
   Ctrl+Shift+G   show / hide the panel
+  Ctrl+Shift + drag the panel with the left mouse button to move it (position is saved)
 
 Loads the DLL from native/build into the running game (no game files change;
 a content-hashed copy is loaded so rebuilds never collide with a loaded file),
@@ -17,6 +18,7 @@ replaces an older DLL version that is still loaded.
 import ctypes
 import ctypes.wintypes as wt
 import hashlib
+import json
 import mmap
 import shutil
 import struct
@@ -29,7 +31,7 @@ from .db import DATA_DIR, Store
 from .hud import read_target, resolve_target, set_target
 from .memory import MODULEENTRY32W, TH32CS_SNAPMODULE, k32
 from .nav import Navigator
-from .picker import EV_CHAR, EV_CLEAR, EV_KEY, EV_OPEN, EV_TOGGLE, Picker
+from .picker import EV_CHAR, EV_CLEAR, EV_KEY, EV_MOVED, EV_OPEN, EV_TOGGLE, Picker
 
 AUTO_CLEAR_AFTER = 10.0   # seconds standing at the destination before it clears itself
 KEY_NAMES = {0x0D: "Enter", 0x1B: "Esc", 0x26: "Up", 0x28: "Down", 0x08: "Backspace", 0x2E: "Delete",
@@ -124,13 +126,39 @@ def inject(pid, dll_path):
         k32.CloseHandle(h)
 
 
+UI_FILE = DATA_DIR / "ui.json"
+ANCHORS = ["top-right", "top-left", "bottom-right", "bottom-left"]
+# Default: bottom-right, raised clear of NWN's compass in that corner (drag to fine-tune).
+DEFAULT_POS = {"anchor": 2, "off_x": 16, "off_y": 230}
+
+
+def load_position():
+    try:
+        p = json.loads(UI_FILE.read_text())
+        return {k: int(p[k]) for k in DEFAULT_POS}
+    except (OSError, ValueError, KeyError, TypeError):
+        return dict(DEFAULT_POS)
+
+
+def save_position(pos):
+    DATA_DIR.mkdir(exist_ok=True)
+    UI_FILE.write_text(json.dumps(pos))
+
+
 class Shm:
     def __init__(self):
         self.m = mmap.mmap(-1, SHM_SIZE, tagname=SHM_NAME)
         struct.pack_into("<II", self.m, 0, MAGIC, DLL_VERSION)
-        struct.pack_into("<iiI", self.m, O_OFFX, 16, 16, 0)
+        self.set_position(load_position())
         self.set_flags(FLAG_VISIBLE)
         self.ev_tail = self.u32(O_EVHEAD)
+
+    def set_position(self, pos):
+        struct.pack_into("<iiI", self.m, O_OFFX, pos["off_x"], pos["off_y"], pos["anchor"])
+
+    def position(self):
+        off_x, off_y, anchor = struct.unpack_from("<iiI", self.m, O_OFFX)
+        return {"anchor": anchor, "off_x": off_x, "off_y": off_y}
 
     def u32(self, off):
         return struct.unpack_from("<I", self.m, off)[0]
@@ -224,6 +252,11 @@ class InGame:
             elif t == EV_CLEAR:
                 log("hotkey: clear destination")
                 set_target(None)
+            elif t == EV_MOVED:
+                pos = self.shm.position()
+                save_position(pos)
+                log(f"panel moved: {ANCHORS[pos['anchor']] if pos['anchor'] < 4 else pos['anchor']} "
+                    f"+{pos['off_x']},{pos['off_y']} (saved)")
             elif t == EV_OPEN:
                 self.picker.start(has_destination=self.nav is not None)
                 self.shm.set_flags(FLAG_VISIBLE)
