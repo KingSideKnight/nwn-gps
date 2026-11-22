@@ -1,46 +1,40 @@
-# nwn-gps
+# NWN GPS
 
-Player-side GPS for Neverwinter Nights: Enhanced Edition (target: Arelith).
-External companion app: reads the running game's memory (read-only), builds a
-POI / area-transition database, routes between areas, and draws an overlay.
+A GPS for Neverwinter Nights: Enhanced Edition multiplayer servers: records the world as you play,
+searches places, routes across areas and linked servers, and draws an in-game panel (works in
+exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This file is for developers.
 
-## Rollback guarantees
-- Nothing in this project writes to the game install or `Documents\Neverwinter Nights`.
-- Memory access opens `nwmain.exe` with `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION`
-  only: the OS will refuse any write.
-- Everything lives in this folder under git. To undo: `git log`, `git revert <commit>`,
-  or delete the folder.
-- If a future step must touch a game file, it backs the file up first and ships a restore script.
+## How it works
+- **Reading:** `nwngps/session.py` reads `nwmain.exe` memory with read-only access (area, position,
+  pins, doors, tiles). Offsets live in `nwngps/layout.py`; `session.check_layout` verifies every
+  class vtable via RTTI at attach and refuses unknown game builds.
+- **Recording:** `nwngps/recorder.py` -> SQLite per world (`db.py`), including portals between
+  linked servers.
+- **Drawing in-game:** `native/nwngps_gl.c` is loaded into the game at runtime; it swaps
+  `GDI32!SwapBuffers` in nwmain's import table, draws a texture Python publishes through shared
+  memory, reads hotkeys via a window subclass, and unhooks/unloads on request. No game files change.
+- **Maps:** tile layouts from memory + tileset art from NWSync / texture packs / KEY-BIF
+  (`resources.py`, `maps.py`, `worldmap.py`).
 
-## Use (game running, not as administrator)
-    python -m nwngps.recorder                 # leave running while you play
-    python -m nwngps.cli find vineyard        # search areas, pins, doors
-    python -m nwngps.cli route vineyard       # directions from where you stand
-    python -m nwngps.cli stats
+## Run from source
+    native\build.cmd                  # once (Visual Studio 2022 C++ tools)
+    python -m pip install pillow
+    python -m nwngps                  # launcher: recorder + in-game GPS (or start_gps.cmd)
+    python -m nwngps cli --help       # search, routes, export/merge, world map
+    python -m unittest discover -s tests
 
-In-game panel (works in exclusive fullscreen; build once with `native\build.cmd`):
+Settings: `Documents\NWN GPS\settings.json`. Data: `%LOCALAPPDATA%\NWN GPS` (set `NWNGPS_DATA` to
+override). The in-game DLL is loaded from `<app folder>\runtime` (some systems block DLLs loaded
+from AppData).
 
-    python -m nwngps.ingame "vineyard"        # loads native/build/nwngps_gl.dll into the running game
-    python -m nwngps.cli go "city gates"      # change destination while it runs
-    # Ctrl+C: the DLL unhooks and unloads itself; no game files are changed
-
-Alternatives: `python -m nwngps.overlay "<dest>" [--other-screen]` (desktop window, windowed/borderless
-or a second monitor) and `python -m nwngps.hud` (RivaTuner OSD text).
-
-Database: `data/nwnarelith_com.sqlite` (git-ignored).
-
-Sharing maps with friends:
-
-    python -m nwngps.cli export my_map.sqlite              # safe copy, even while the GPS runs
-    python -m nwngps.cli merge their_map.sqlite --dry-run  # what would be added
-    python -m nwngps.cli merge their_map.sqlite            # backs yours up to data/backups first
-
-Scale (synthetic test, `recon/scale_test.py`): 3,888 areas, 145,800 POIs, 9,558 transitions = 26 MB;
-search 4 ms, whole-world route 76 ms, full-screen map frame 73 ms. Back it up by copying the file; delete it to start over.
+Scale (synthetic, `recon/scale_test.py`): 3,888 areas, 145,800 POIs, 9,558 transitions = 26 MB;
+search 4 ms, whole-world route 76 ms, full-screen map frame 73 ms.
 
 ## Layout
-- `nwngps/memory.py` – read-only process memory access (scan, read, strings).
-- `recon/` – reverse-engineering tools and notes (`FINDINGS.md`).
-  - `inspect_exe.py`, `dump_exports.py`, `find_vtables.py` – static analysis of nwmain.exe
-  - `probe.py` – live read-only probing (`python recon/probe.py` for help)
-  - `out/` – probe logs and dumps (git-ignored)
+- `nwngps/` application (`__main__.py` entry point, `config.py` paths/settings)
+- `native/` the in-game DLL (C, ~600 lines, no third-party code)
+- `tests/` unit tests; `recon/` reverse-engineering tools and notes (`recon/FINDINGS.md`)
+
+## Supported game build
+Neverwinter Nights: Enhanced Edition 8193.37-17 (26c6e573, Oct 2025). Other builds are detected
+and refused until `layout.py` is updated (re-run `recon/find_vtables.py` and the probes).
