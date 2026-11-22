@@ -2,9 +2,12 @@
 
   python -m nwngps.overlay "<destination>"     e.g. "vineyard", "city gates"
   python -m nwngps.overlay                     no destination: minimap only
+  python -m nwngps.overlay "<dest>" --other-screen
+                                               panel on your other monitor (use with exclusive fullscreen)
 
 Click-through and always on top; follows the game window, hides when the game
-is minimised. Close with Ctrl+C in the terminal that started it.
+is minimised. Exclusive fullscreen hides every other window: use borderless
+fullscreen, windowed, or --other-screen. Close with Ctrl+C in its terminal.
 Read-only towards the game; reads the database the recorder writes.
 """
 import ctypes
@@ -21,8 +24,9 @@ from .db import Store
 from .nav import Navigator, compass
 from .session import IN_GAME, Session
 
-W, H = 320, 470
-MAP_Y, MAP_SIZE = 150, 300
+W, H = 320, 500
+MAP_Y, MAP_SIZE = 178, 300
+ARROW_Y = 108          # centre of the guidance arrow (below a two-line instruction)
 BG, FG, DIM = "#101418", "#e8eef2", "#7d8a94"
 ACCENT, PIN, DOOR, ME, ROUTE = "#3fc1ff", "#f2c94c", "#b07a4a", "#3fc1ff", "#4cd964"
 
@@ -33,6 +37,40 @@ user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
 user32.GetParent.restype = wt.HWND
 EnumWindowsProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
+
+
+MonitorEnumProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HMONITOR, wt.HDC, ctypes.POINTER(wt.RECT), wt.LPARAM)
+
+
+def monitors():
+    """Work areas (l, t, r, b) of all monitors."""
+    out = []
+
+    def cb(hmon, _hdc, _rc, _):
+        mi = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+        user32.GetMonitorInfoW(hmon, ctypes.byref(mi))
+        w = mi.rcWork
+        out.append((w.left, w.top, w.right, w.bottom))
+        return True
+
+    user32.EnumDisplayMonitors(None, None, MonitorEnumProc(cb), 0)
+    return out
+
+
+def other_screen(game_rect):
+    """Work area of a monitor that doesn't hold the game (largest one), or None."""
+    def overlap(a, b):
+        return max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    mons = monitors()
+    if game_rect:
+        mons = [m for m in mons if overlap(m, game_rect) == 0]
+    else:   # game minimised / unknown: anything but the primary
+        mons = [m for m in mons if (m[0], m[1]) != (0, 0)]
+    return max(mons, key=lambda m: (m[2] - m[0]) * (m[3] - m[1])) if mons else None
 
 
 def game_client_rect(pid):
@@ -82,7 +120,8 @@ class Poller(threading.Thread):
 
 
 class Overlay:
-    def __init__(self, dest_text):
+    def __init__(self, dest_text, other_screen=False):
+        self.other_screen = other_screen
         self.store = Store()
         self.nav = None
         if dest_text:
@@ -122,6 +161,12 @@ class Overlay:
 
     def _follow_game(self):
         rect = game_client_rect(self.poller.pid) if self.poller.pid else None
+        if self.other_screen:
+            # companion panel on another monitor: works with exclusive fullscreen too
+            mon = other_screen(rect) or other_screen(None)
+            if mon:
+                self.root.geometry(f"+{mon[2] - W - 24}+{mon[1] + 24}")
+            return
         if rect is None:
             if self.root.state() != "withdrawn" and self.poller.pid:
                 self.root.withdraw()
@@ -166,21 +211,22 @@ class Overlay:
         c = self.c
         if g.status == "NAV":
             ang = g.relative if g.relative is not None else g.bearing
-            self._arrow(50, 85, 30, ang, ROUTE)
-            c.create_text(95, 62, anchor="nw", text=f"{g.distance:.0f} m", fill=FG, font=("Segoe UI", 20, "bold"))
+            self._arrow(50, ARROW_Y, 28, ang, ROUTE)
+            c.create_text(95, ARROW_Y - 24, anchor="nw", text=f"{g.distance:.0f} m", fill=FG,
+                          font=("Segoe UI", 20, "bold"))
             turn = ""
             if g.relative is not None:
                 a = g.relative
                 turn = "ahead" if abs(a) < 20 else ("behind" if abs(a) > 160 else
                        f"{'right' if a > 0 else 'left'} {abs(a):.0f}°")
-            c.create_text(97, 98, anchor="nw", text=f"{compass(g.bearing)}  ·  {turn}", fill=DIM,
+            c.create_text(97, ARROW_Y + 12, anchor="nw", text=f"{compass(g.bearing)}  ·  {turn}", fill=DIM,
                           font=("Segoe UI", 10))
         elif g.status == "ARRIVED":
-            c.create_text(W / 2, 80, text="✓", fill=ROUTE, font=("Segoe UI", 30, "bold"))
+            c.create_text(W / 2, ARROW_Y, text="✓", fill=ROUTE, font=("Segoe UI", 30, "bold"))
         c.create_text(14, 40, anchor="nw", text=g.line1, width=W - 28, fill=FG if g.status != "NO_ROUTE" else PIN,
                       font=("Segoe UI", 10))
         if g.line2:
-            c.create_text(14, 124, anchor="nw", text=g.line2, width=W - 28, fill=DIM, font=("Segoe UI", 8))
+            c.create_text(14, ARROW_Y + 42, anchor="nw", text=g.line2, width=W - 28, fill=DIM, font=("Segoe UI", 8))
 
     def _arrow(self, cx, cy, r, deg, color):
         a = math.radians(deg)
@@ -229,7 +275,9 @@ class Overlay:
 
 
 def main():
-    Overlay(" ".join(a for a in sys.argv[1:])).run()
+    args = sys.argv[1:]
+    other = "--other-screen" in args
+    Overlay(" ".join(a for a in args if not a.startswith("--")), other_screen=other).run()
 
 
 if __name__ == "__main__":
