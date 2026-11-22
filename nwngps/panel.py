@@ -1,4 +1,4 @@
-"""Draw the GPS panel as an RGBA image (Pillow). Used by the in-game renderer.
+﻿"""Draw the GPS panel as an RGBA image (Pillow). Used by the in-game renderer.
 
 render(snap, guidance, pois, area_size) -> PIL.Image (W x H, straight alpha)
 Drawn at 2x and downsampled for smooth edges.
@@ -102,7 +102,7 @@ def render_picker(picker, area_name):
     d.rounded_rectangle((12 * SS, 38 * SS, (W - 12) * SS, 66 * SS), radius=5 * SS, fill=INPUT_BG,
                         outline=ACCENT_RGBA, width=SS)
     q = picker.query
-    shown = q if len(q) < 34 else "…" + q[-33:]
+    shown = q if len(q) < 34 else "â€¦" + q[-33:]
     _text(d, 20, 52, shown + "|", 11, FG, anchor="lm")
     if not q:
         _text(d, 24, 52, "type to search areas, pins, doors", 10, DIM, anchor="lm")
@@ -119,16 +119,27 @@ def render_picker(picker, area_name):
         tag = {"pin": "pin", "door": "door", "area": "area", "user": "mark", "clear": ""}.get(r["kind"], r["kind"])
         _text(d, 16, y, (r["name"] or "")[:40], 10, color, bold=(i == picker.sel))
         if r.get("area"):
-            _text(d, 16, y + 18, f"{tag} · {area_name(r['area'])}"[:52], 8, DIM)
+            _text(d, 16, y + 18, f"{tag} Â· {area_name(r['area'])}"[:52], 8, DIM)
         y += 44
         if y > H - 50:
             break
-    _legend(d, H - 20, [("↑↓", "choose"), ("Enter", "go"), ("Esc", "cancel")])
+    _legend(d, H - 20, [("â†‘â†“", "choose"), ("Enter", "go"), ("Esc", "cancel")])
     return img.resize((W, H), Image.LANCZOS)
 
 
-HOTKEYS = [("F", "Search"), ("X", "Clear"), ("M", "Map"), ("G", "Hide")]
-HOTKEYS2 = [("E", "Export map"), ("I", "Import maps")]
+LEGEND = [("Ctrl+Shift", [("F", "Search"), ("X", "Clear"), ("M", "Map"), ("G", "Hide")]),
+          ("Ctrl+Shift", [("E", "Export map"), ("I", "Import maps")])]
+
+
+KEYTEXT = {"search": "Ctrl+Shift+F", "clear": "Ctrl+Shift+X", "map": "Ctrl+Shift+M", "hide": "Ctrl+Shift+G",
+           "export": "Ctrl+Shift+E", "import": "Ctrl+Shift+I"}
+
+
+def set_legend(rows, keytext=None):
+    """Legend rows from hotkeys.legend_rows() and key names for messages (follow the settings)."""
+    LEGEND[:] = rows
+    if keytext:
+        KEYTEXT.update(keytext)
 
 
 def toast_banner(img, d, text, kind, y, width):
@@ -156,13 +167,13 @@ def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
     img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
-    _legend(d, LEGEND_Y, HOTKEYS, prefix="Ctrl+Shift")
-    _legend(d, LEGEND2_Y, HOTKEYS2, prefix="Ctrl+Shift")
+    for y, (prefix, items) in zip((LEGEND_Y, LEGEND2_Y), LEGEND):
+        _legend(d, y, items, prefix=prefix)
     if toast:
         toast_banner(img, d, toast[0], toast[1], MAP_Y + 14, W)
     elif inbox:
         toast_banner(img, d, f"{inbox} shared map{'s' if inbox > 1 else ''} in your Inbox - "
-                             f"Ctrl+Shift+I to import", "info", MAP_Y + 14, W)
+                             f"{KEYTEXT['import']} to import", "info", MAP_Y + 14, W)
     _text(d, W / 2, DRAG_HINT_Y, "Ctrl+Shift + drag the panel to move it", 7, DIM, anchor="mm")
     _text(d, 14, 12, (g.dest_name if g else "GPS")[:34], 11, FG, bold=True)
     if snap is None or snap.state != "IN_GAME":
@@ -173,13 +184,13 @@ def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
     if g:
         _guidance(d, g)
     else:
-        _text(d, 14, 40, "No destination. Press Ctrl+Shift+F to choose one.", 10, DIM, width=W - 28)
+        _text(d, 14, 40, f"No destination. Press {KEYTEXT['search']} to choose one.", 10, DIM, width=W - 28)
     _map(img, d, snap, g, pois, area_size, map_img)
     if toast:     # draw messages on top of the map
         toast_banner(img, d, toast[0], toast[1], MAP_Y + 14, W)
     elif inbox:
         toast_banner(img, d, f"{inbox} shared map{'s' if inbox > 1 else ''} in your Inbox - "
-                             f"Ctrl+Shift+I to import", "info", MAP_Y + 14, W)
+                             f"{KEYTEXT['import']} to import", "info", MAP_Y + 14, W)
     _text(d, 14, H - 12, (snap.area_name or snap.area or "")[:46], 8, DIM, anchor="ls")
     _text(d, W - 14, H - 12, (snap.server or "").replace("ARE_", ""), 8, DIM, anchor="rs")
     return img.resize((W, H), Image.LANCZOS)
@@ -194,10 +205,10 @@ def _guidance(d, g):
         if g.relative is not None:
             a = g.relative
             turn = "ahead" if abs(a) < 20 else ("behind" if abs(a) > 160 else
-                                                 f"{'right' if a > 0 else 'left'} {abs(a):.0f}°")
-        _text(d, 97, ARROW_Y + 12, f"{compass(g.bearing)}  ·  {turn}", 10, DIM)
+                                                 f"{'right' if a > 0 else 'left'} {abs(a):.0f}Â°")
+        _text(d, 97, ARROW_Y + 12, f"{compass(g.bearing)}  Â·  {turn}", 10, DIM)
     elif g.status == "ARRIVED":
-        _text(d, W / 2, ARROW_Y, "✓", 30, ROUTE, bold=True, anchor="mm")
+        _text(d, W / 2, ARROW_Y, "âœ“", 30, ROUTE, bold=True, anchor="mm")
     _text(d, 14, 36, g.line1, 10, PIN if g.status == "NO_ROUTE" else FG, width=W - 28)
     if g.line2:
         _text(d, 14, ARROW_Y + 42, g.line2, 8, DIM, width=W - 28)

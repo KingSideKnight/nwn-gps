@@ -1,4 +1,4 @@
-"""In-game GPS panel (works in exclusive fullscreen).
+﻿"""In-game GPS panel (works in exclusive fullscreen).
 
   python -m nwngps.ingame ["<destination>"]
 
@@ -46,7 +46,9 @@ INBOX_CHECK_EVERY = 10.0
 AUTO_CLEAR_AFTER = 10.0   # seconds standing at the destination before it clears itself
 KEY_NAMES = {0x0D: "Enter", 0x1B: "Esc", 0x26: "Up", 0x28: "Down", 0x08: "Backspace", 0x2E: "Delete",
              0x09: "Tab", 0x21: "PgUp", 0x22: "PgDn", 0x24: "Home", 0x23: "End"}
-from .session import IN_GAME, Session
+from urllib.parse import urlparse
+
+from .session import IN_GAME, UNSUPPORTED, Session
 
 BUILD = Path(__file__).resolve().parent.parent / "native" / "build"
 RUNTIME = DATA_DIR / "runtime"
@@ -100,17 +102,35 @@ def our_modules(pid):
     return out
 
 
-def runtime_dll():
-    """Newest build, copied to data/runtime/nwngps_gl-<hash>.dll (the file actually loaded)."""
-    builds = [p for p in (BUILD / "nwngps_gl_new.dll", BUILD / "nwngps_gl.dll") if p.exists()]
+def runtime_dirs():
+    """Folders to load the DLL from, best first. Some systems refuse DLLs from AppData\\Local, so
+    the app's own folder comes first, then Documents\\NWN GPS, then the data folder."""
+    from .config import SHARE_DIR, app_dir
+    return [app_dir() / "runtime", SHARE_DIR / "runtime", RUNTIME]
+
+
+def dll_source():
+    from .config import bundle_dir
+    builds = [p for p in (bundle_dir() / "nwngps_gl.dll",            # packaged release
+                          BUILD / "nwngps_gl_new.dll", BUILD / "nwngps_gl.dll") if p.exists()]
     if not builds:
-        sys.exit("DLL not built: run native\\build.cmd")
-    src = max(builds, key=lambda p: p.stat().st_mtime)
+        sys.exit("nwngps_gl.dll is missing (developers: run native\\build.cmd)")
+    return max(builds, key=lambda p: p.stat().st_mtime)
+
+
+def runtime_dll(folder=None):
+    """The newest build copied to <folder>/nwngps_gl-<hash>.dll (the file actually loaded; the hash
+    means a rebuild never has to overwrite a file the game holds). None if folder isn't writable."""
+    src = dll_source()
     digest = hashlib.sha1(src.read_bytes()).hexdigest()[:10]
-    RUNTIME.mkdir(parents=True, exist_ok=True)
-    dst = RUNTIME / f"{DLL_PREFIX}-{digest}.dll"
-    if not dst.exists():
-        shutil.copy2(src, dst)
+    folder = folder or runtime_dirs()[0]
+    dst = folder / f"{DLL_PREFIX}-{digest}.dll"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        if not dst.exists():
+            shutil.copy2(src, dst)
+    except OSError:
+        return None
     return dst
 
 
@@ -132,7 +152,9 @@ def inject(pid, dll_path):
         k32.GetExitCodeThread(t, ctypes.byref(code))
         k32.CloseHandle(t)
         k32.VirtualFreeEx(h, mem, 0, 0x8000)
-        return code.value != 0
+        # The exit code is only the low 32 bits of the HMODULE, which can be 0 for a loaded module:
+        # the module list is the reliable answer.
+        return code.value != 0 or Path(dll_path).name.lower() in our_modules(pid)
     finally:
         k32.CloseHandle(h)
 
@@ -152,7 +174,7 @@ def load_position():
 
 
 def save_position(pos):
-    DATA_DIR.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     UI_FILE.write_text(json.dumps(pos))
 
 
@@ -233,8 +255,10 @@ def unload_old(pid, shm):
 class InGame:
     def __init__(self):
         self.store, self.session, self.shm = Store(), Session(log=log), Shm()
+        self.nwsync_host = None
         self.picker = Picker(self.store)
-        self.dll = runtime_dll()
+        dll_source()                        # fail early and clearly if the DLL is missing
+        self.next_inject, self.inject_fails = 0.0, 0
         self.nav, self.target, self.pois, self.pois_area = None, object(), [], None
         self.injected_pid, self.last_status, self.last_key, self.last_publish = None, None, None, 0.0
         self.visible = True
@@ -245,6 +269,16 @@ class InGame:
         self.inbox_n, self.inbox_checked = 0, 0.0
         self.jobs = share.Jobs(self.store.world, self.notify)
         share.ensure_folders()
+        self.load_hotkeys()
+
+    def load_hotkeys(self):
+        """Hotkeys from settings.json -> the DLL's key table and the panel legend."""
+        from . import config, hotkeys
+        hk = hotkeys.resolve(config.load_settings()["hotkeys"], warn=log)
+        table = hotkeys.table_bytes(hk)
+        self.shm.m[hotkeys.TABLE_OFFSET:hotkeys.TABLE_OFFSET + len(table)] = table
+        panel.set_legend(hotkeys.legend_rows(hk), {a: v[2] for a, v in hk.items()})
+        self.hotkey_text = ", ".join(f"{v[2]} {hotkeys.LABELS[a].lower()}" for a, v in hk.items())
 
     def notify(self, text, kind="info"):
         """On-screen message in the panel (called from background jobs too)."""
@@ -264,21 +298,37 @@ class InGame:
         self.shm.set_flags(f)
 
     def ensure_dll(self, pid):
+        """Load our DLL into the game (once per game process). On failure, retry with backoff -
+        never every frame."""
+        if time.time() < self.next_inject:
+            return False
         loaded = our_modules(pid)
-        if self.dll.name.lower() in loaded:
-            log(f"{self.dll.name} already loaded; reusing it")
-        else:
-            if loaded:
-                log(f"replacing loaded {', '.join(loaded)} with {self.dll.name}")
-                if not unload_old(pid, self.shm):
-                    log("old DLL did not unload (is the game minimised? it unloads on its next frame)")
-                    return False
-            log(f"loading {self.dll.name} into nwmain.exe pid {pid}")
-            if not inject(pid, self.dll):
-                log("injection failed")
+        want = f"{DLL_PREFIX}-{hashlib.sha1(dll_source().read_bytes()).hexdigest()[:10]}.dll"
+        if want in loaded:
+            log(f"{want} already loaded; reusing it")
+            self.injected_pid = pid
+            return True
+        if loaded:
+            log(f"replacing loaded {', '.join(loaded)} with {want}")
+            if not unload_old(pid, self.shm):
+                log("old DLL did not unload yet (it unloads on the game's next frame); retrying shortly")
+                self.next_inject = time.time() + 5
                 return False
-        self.injected_pid = pid
-        return True
+        for folder in runtime_dirs():
+            dll = runtime_dll(folder)
+            if dll is None:
+                continue
+            log(f"loading {dll} into nwmain.exe pid {pid}")
+            if inject(pid, dll):
+                self.injected_pid, self.inject_fails = pid, 0
+                return True
+            log(f"  the game refused to load it from {folder}; trying the next folder")
+        self.inject_fails += 1
+        wait = min(60, 5 * 2 ** (self.inject_fails - 1))
+        log(f"could not load the in-game panel (attempt {self.inject_fails}); retrying in {wait} s. "
+            "Security software may be blocking it; the recorder keeps working.")
+        self.next_inject = time.time() + wait
+        return False
 
     def handle_events(self):
         for t, code, _mods in self.shm.events():
@@ -290,7 +340,7 @@ class InGame:
                 self.fullmap = not self.fullmap
                 if self.fullmap:
                     if self.maps is None:
-                        self.maps = maps.Maps(Resources())
+                        self.maps = maps.Maps(Resources(self.nwsync_host))
                     self.fullmap_r = self.fullmap_r or FullMap(self.store, self.maps)
                     self.fullmap_r.rebuild()
                 self.apply_flags()
@@ -334,7 +384,7 @@ class InGame:
         """Tile-art map of the current area (from live memory, else the recorded layout)."""
         try:
             if self.maps is None:
-                self.maps = maps.Maps(Resources())
+                self.maps = maps.Maps(Resources(self.nwsync_host))
             tiles = maps.read_tiles(self.session.mem, snap.area_ptr, *snap.size) if snap.size else None
             tileset, w, h = snap.tileset, *(snap.size or (0, 0))
             if not tiles:
@@ -371,8 +421,32 @@ class InGame:
             log(f"destination: {dest['name']} in {self.store.area_name(dest['area'])}" if dest
                 else "destination cleared")
 
+    def switch_world(self, snap):
+        """Connected to a different server family: use its database and its NWSync content."""
+        if snap.nwsync and not self.nwsync_host:
+            self.nwsync_host = urlparse(snap.nwsync).hostname
+        from .db import db_name
+        if not snap.world or db_name(snap.world) == db_name(self.store.world):
+            self.store.world = snap.world or self.store.world
+            return
+        log(f"world: {snap.world} (was {self.store.world})")
+        self.store.close()
+        self.store = Store(snap.world)
+        self.picker = Picker(self.store)
+        self.jobs = share.Jobs(self.store.world, self.notify)
+        self.nwsync_host = urlparse(snap.nwsync).hostname if snap.nwsync else None
+        self.maps, self.map_img, self.fullmap_r = None, None, None
+        self.pois_area, self.target = None, object()          # re-resolve the destination in this world
+
     def frame(self):
         snap = self.session.poll()
+        if snap.state == UNSUPPORTED:
+            if not getattr(self, "_unsupported_logged", False):
+                log("unsupported game version: not loading anything into the game")
+                self._unsupported_logged = True
+            return
+        if snap.world and snap.state != "NO_GAME":
+            self.switch_world(snap)
         pid = self.session.mem.pid if self.session.mem else None
         if pid and pid != self.injected_pid and snap.state != "NO_GAME":
             self.ensure_dll(pid)
@@ -416,8 +490,7 @@ class InGame:
             self.last_status = st
 
     def run(self):
-        log("in-game GPS running (Ctrl+C to stop).  In game: Ctrl+Shift+F search, "
-            "Ctrl+Shift+X clear, Ctrl+Shift+G hide")
+        log(f"in-game GPS running (Ctrl+C to stop). In game: {self.hotkey_text}")
         try:
             while True:
                 t0 = time.time()
@@ -437,6 +510,9 @@ class InGame:
 
 
 def main():
+    if any(a in ("-h", "--help", "/?") for a in sys.argv[1:]):
+        print(__doc__)
+        return
     from .single import single_instance
     single_instance("ingame")
     if len(sys.argv) > 1:

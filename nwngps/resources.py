@@ -8,8 +8,7 @@ import struct
 from compression import zstd
 from pathlib import Path
 
-GAME = Path(r"D:\SteamLibrary\steamapps\common\Neverwinter Nights")
-USER = Path.home() / "Documents" / "Neverwinter Nights"
+from . import config
 
 RESTYPE = {"tga": 3, "txi": 2022, "set": 2013, "mdl": 2002, "dds": 2033, "are": 2012, "plt": 6, "png": 0x0BD8}
 RESTYPE_EXT = {v: k for k, v in RESTYPE.items()}
@@ -29,13 +28,13 @@ def nsyc_decode(blob):
 
 
 class NWSync:
-    def __init__(self, origin_host=None):
-        d = USER / "nwsync"
+    def __init__(self, origin_host=None, user_dir=None):
+        """origin_host: part of the server's NWSync URL (e.g. 'nwnarelith.com'); None = no server content."""
+        d = Path(user_dir or config.user_dir()) / "nwsync"
         self.meta = sqlite3.connect(f"file:{d / 'nwsyncmeta.sqlite3'}?mode=ro", uri=True)
         q = "select sha1, origin_url from manifests order by last_used_at desc"
         rows = self.meta.execute(q).fetchall()
-        if origin_host:
-            rows = [r for r in rows if origin_host in r[1]] or rows
+        rows = [r for r in rows if origin_host and origin_host in r[1]]
         self.manifest = rows[0][0] if rows else None
         self.shards = [sqlite3.connect(f"file:{p}?mode=ro", uri=True) for p in sorted(d.glob("nwsyncdata_*.sqlite3"))]
 
@@ -127,17 +126,24 @@ class KeyBif:
 
 
 class Resources:
-    def __init__(self, nwsync_host="nwnarelith"):
+    def __init__(self, nwsync_host=None, game_dir=None):
+        """nwsync_host: the connected server's NWSync host (from the world name), so its
+        custom tilesets are used; base game content always comes after it."""
         self.sources = []
-        try:
-            self.sources.append(NWSync(nwsync_host))
-        except sqlite3.Error:
-            pass
-        for p in sorted((GAME / "data" / "txpk").glob("*.erf")):
+        if nwsync_host:
+            try:
+                self.sources.append(NWSync(nwsync_host))
+            except sqlite3.Error:
+                pass
+        game = Path(game_dir) if game_dir else config.game_dir()
+        if game is None:
+            raise FileNotFoundError("Neverwinter Nights install not found: set game_dir in "
+                                    f"{config.SETTINGS_FILE}")
+        for p in sorted((game / "data" / "txpk").glob("*.erf")):
             self.sources.append(ERF(p))
         for k in ("nwn_retail.key", "nwn_base.key"):
-            if (GAME / "data" / k).exists():
-                self.sources.append(KeyBif(GAME / "data" / k))
+            if (game / "data" / k).exists():
+                self.sources.append(KeyBif(game / "data" / k))
 
     def get(self, resref, ext):
         rtype = RESTYPE[ext] if isinstance(ext, str) else ext

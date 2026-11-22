@@ -1,4 +1,4 @@
-"""SQLite storage for areas, points of interest and transitions.
+﻿"""SQLite storage for areas, points of interest and transitions.
 
 Database file: <project>/data/<module>.sqlite (git-ignored; back it up by copying the file).
 """
@@ -7,7 +7,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from .config import DATA_DIR  # %LOCALAPPDATA%\\NWN GPS (see config.py)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS areas (
@@ -74,10 +74,59 @@ def dist(ax, ay, bx, by):
     return math.hypot(ax - bx, ay - by)
 
 
+LEGACY_DATA = Path(__file__).resolve().parent.parent / "data"     # before release prep
+
+
+def migrate_legacy(log=print):
+    """One-time: copy data from the old <project>/data folder into DATA_DIR. Copies, never moves:
+    the old folder is left as it was (rollback = delete DATA_DIR)."""
+    if not LEGACY_DATA.is_dir() or LEGACY_DATA.resolve() == DATA_DIR.resolve():
+        return False
+    marker = DATA_DIR / ".migrated_from_project"
+    if marker.exists():
+        return False
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for db in LEGACY_DATA.glob("*.sqlite"):
+        dest = DATA_DIR / db.name
+        if not dest.exists():
+            src = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+            out = sqlite3.connect(dest)
+            with out:
+                src.backup(out)
+            src.close()
+            out.close()
+            copied.append(db.name)
+    import shutil
+    for name in ("recent.json", "ui.json", "nav_target.json"):
+        if (LEGACY_DATA / name).exists() and not (DATA_DIR / name).exists():
+            shutil.copy2(LEGACY_DATA / name, DATA_DIR / name)
+            copied.append(name)
+    if (LEGACY_DATA / "maps").is_dir() and not (DATA_DIR / "maps").exists():
+        shutil.copytree(LEGACY_DATA / "maps", DATA_DIR / "maps")
+        copied.append("maps/")
+    marker.write_text(str(LEGACY_DATA))
+    if copied:
+        log(f"copied your existing data from {LEGACY_DATA} to {DATA_DIR}: {', '.join(copied)}")
+    return bool(copied)
+
+
+def latest_world():
+    """World of the most recently used map database (for the command line), or None.
+    Only databases the GPS keeps for a world count (not copies someone dropped in the folder)."""
+    dbs = [p for p in DATA_DIR.glob("*.sqlite") if not p.stem.endswith(("-share", "preview"))] \
+        if DATA_DIR.exists() else []
+    dbs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return dbs[0].stem if dbs else None
+
+
 class Store:
-    def __init__(self, world="nwnarelith.com", path=None):
-        DATA_DIR.mkdir(exist_ok=True)
-        self.world = world
+    def __init__(self, world=None, path=None):
+        """world: e.g. 'nwnarelith.com' (from the server's NWSync host). None = the most recently
+        used world (handy for the command line)."""
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.world = world or latest_world() or "unknown"
+        world = self.world
         self.path = Path(path) if path else DATA_DIR / f"{db_name(world)}.sqlite"
         self.db = sqlite3.connect(self.path, timeout=10)
         self.db.row_factory = sqlite3.Row

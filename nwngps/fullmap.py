@@ -1,4 +1,4 @@
-"""Full-screen map (Ctrl+Shift+M): the stitched world map around you, with your position,
+﻿"""Full-screen map (Ctrl+Shift+M): the stitched world map around you, with your position,
 the route across areas and the destination. Falls back to the current area's own map when
 that area isn't linked into the world map yet. Drawn at reduced resolution; the DLL scales
 it to the game window on the GPU."""
@@ -7,7 +7,7 @@ import math
 from PIL import Image, ImageDraw
 
 from . import worldmap
-from .panel import TOAST_COLORS, _arrow, _dashed, display_pois, font
+from .panel import KEYTEXT, TOAST_COLORS, _arrow, _dashed, display_pois, font
 
 BG = (10, 13, 16, 225)
 FG, DIM, ROUTE, ME, GOLD = (232, 238, 242, 255), (125, 138, 148, 255), (76, 217, 100, 255), \
@@ -80,7 +80,7 @@ class FullMap:
         _text(d, (W - PAD, 18), where[:90], 9, DIM, anchor="ra")
         if g:
             _text(d, (PAD, H - 12), f"To {g.dest_name}: {g.line1}"[:140], 9, FG, anchor="ls")
-        _text(d, (W - PAD, H - 12), "Ctrl+Shift+M  close map", 9, DIM, anchor="rs")
+        _text(d, (W - PAD, H - 12), f"{KEYTEXT['map']}  close map", 9, DIM, anchor="rs")
         if toast:
             color = TOAST_COLORS.get(toast[1], TOAST_COLORS["info"])
             tw = d.textlength(toast[0], font=font(10)) + 40

@@ -1,4 +1,4 @@
-"""Destination picker driven by key events from the in-game DLL.
+﻿"""Destination picker driven by key events from the in-game DLL.
 
 Empty query: recent destinations (+ "Clear destination" when one is set).
 Typing searches areas, pins and doors. Up/Down/PgUp/PgDn move, Enter picks, Esc cancels.
@@ -28,7 +28,7 @@ def load_recent():
 
 def remember(pick):
     rec = [r for r in load_recent() if (r["area"], r["name"]) != (pick["area"], pick["name"])]
-    DATA_DIR.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     RECENT_FILE.write_text(json.dumps([pick] + rec[:MAX_RECENT - 1]))
 
 

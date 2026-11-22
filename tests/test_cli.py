@@ -44,7 +44,7 @@ class Cli(unittest.TestCase):
         self.assertIsNone(hud.read_target())
 
     def test_merge_does_not_touch_destination(self):
-        share = self.dir / "share.sqlite"
+        share = self.dir / "Exports" / "share.sqlite"      # exports live outside the data folder
         run("export", str(share))
         out = run("merge", str(share), "--dry-run")
         self.assertIn("Would add", out)

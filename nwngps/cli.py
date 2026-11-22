@@ -11,6 +11,7 @@
   python -m nwngps.cli import-jsonl <transitions.jsonl>
 
 Without --from, `route` starts from where your character is right now (game must be running).
+Every command takes --world <name> (see `worlds`); the default is the most recently used world.
 """
 import json
 import math
@@ -95,7 +96,14 @@ def main():
         print(__doc__)
         return
     cmd, args = sys.argv[1], sys.argv[2:]
-    store = Store()
+    world = None
+    if "--world" in args:                       # e.g. --world nwnarelith_com (default: most recent)
+        i = args.index("--world")
+        world, args = args[i + 1], args[:i] + args[i + 2:]
+    if cmd == "worlds":
+        print("\n".join(Store.worlds()) or "no map databases yet")
+        return
+    store = Store(world)
     try:
         if cmd == "stats":
             print(store.stats())

@@ -1,4 +1,4 @@
-"""In-game text HUD through RivaTuner Statistics Server (works in exclusive fullscreen).
+﻿"""In-game text HUD through RivaTuner Statistics Server (works in exclusive fullscreen).
 
   python -m nwngps.hud ["<destination>"]
   python -m nwngps.cli go "<destination>"     change destination while the HUD runs
@@ -23,7 +23,7 @@ GREEN, WHITE, GREY, GOLD = "4CD964", "FFFFFF", "9AA5AE", "F2C94C"
 
 def set_target(text, pick=None):
     """Write (or clear) the shared destination. `pick` = exact row chosen in the picker."""
-    DATA_DIR.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     if text or pick:
         TARGET_FILE.write_text(json.dumps({"query": text or pick["name"], "pick": pick, "t": time.time()}))
     elif TARGET_FILE.exists():

@@ -24,7 +24,7 @@
 #include <string.h>
 
 /* ---- shared memory layout v2 (keep in sync with nwngps/ingame.py) ---- */
-#define DLL_VERSION 3u
+#define DLL_VERSION 4u
 #define SHM_NAME L"nwngps_overlay_v3"
 #define SHM_MAGIC 0x5350474Eu /* 'NGPS' */
 #define MAX_W 2048
@@ -55,6 +55,12 @@
 
 typedef struct { uint32_t type, code, mods, pad; } ShmEvent;
 
+/* configurable hotkeys (v4), in this order; Python fills the table from settings.json */
+#define HK_COUNT 6
+enum { HK_SEARCH, HK_CLEAR, HK_MAP, HK_HIDE, HK_EXPORT, HK_IMPORT };
+static const uint32_t HK_DEFAULT[HK_COUNT][2] = {{'F', 3}, {'X', 3}, {'M', 3}, {'G', 3}, {'E', 3}, {'I', 3}};
+static const uint32_t HK_EVENT[HK_COUNT] = {EV_OPEN, EV_CLEAR, EV_FULLMAP, EV_TOGGLE, EV_EXPORT, EV_IMPORT};
+
 typedef struct {
     uint32_t magic, version;
     volatile uint32_t seq;     /* seqlock: odd while Python writes */
@@ -70,6 +76,8 @@ typedef struct {
     volatile uint32_t ev_head;    /* total events written; slot = head % GPS_EV_RING */
     char msg[128];
     ShmEvent events[GPS_EV_RING];     /* at offset 192 */
+    uint8_t pad[64];                  /* -> offset 1280 */
+    uint32_t hotkeys[HK_COUNT][2];    /* v4: {virtual key, mods: 1 shift, 2 ctrl, 4 alt}; vk 0 = default */
 } ShmHeader;
 
 /* ---- GL constants / function pointers beyond GL 1.1 ---- */
@@ -477,15 +485,19 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
-            if (ctrl && shift && wp == 'G') { push_event(EV_TOGGLE, 0); g_swallow_char = 1; return 0; }
-            if (ctrl && shift && wp == 'X') { push_event(EV_CLEAR, 0); g_swallow_char = 1; return 0; }
-            if (ctrl && shift && wp == 'M') { push_event(EV_FULLMAP, 0); g_swallow_char = 1; return 0; }
-            if (ctrl && shift && wp == 'E') { push_event(EV_EXPORT, 0); g_swallow_char = 1; return 0; }
-            if (ctrl && shift && wp == 'I') { push_event(EV_IMPORT, 0); g_swallow_char = 1; return 0; }
-            if (ctrl && shift && wp == 'F') {
-                if (!g_capturing) { set_capture(1); push_event(EV_OPEN, 0); }
-                g_swallow_char = 1;
-                return 0;
+            if (!g_capturing) {
+                uint32_t mods = (shift ? 1u : 0u) | (ctrl ? 2u : 0u) | (GetKeyState(VK_MENU) < 0 ? 4u : 0u);
+                int i;
+                for (i = 0; i < HK_COUNT; i++) {
+                    uint32_t vk = g_shm->hotkeys[i][0], m = g_shm->hotkeys[i][1];
+                    if (!vk) { vk = HK_DEFAULT[i][0]; m = HK_DEFAULT[i][1]; }
+                    if ((uint32_t)wp == vk && mods == m) {
+                        if (i == HK_SEARCH) set_capture(1);   /* picker owns the keyboard from now on */
+                        push_event(HK_EVENT[i], 0);
+                        g_swallow_char = 1;
+                        return 0;
+                    }
+                }
             }
             if (g_capturing) {
                 if (wp == VK_RETURN || wp == VK_ESCAPE) {

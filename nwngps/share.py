@@ -6,35 +6,15 @@
 
 Your own database is backed up before every import (data/backups).
 """
-import ctypes
 import shutil
 import threading
 import time
-import uuid
 from pathlib import Path
 
 from .db import Store
 
 
-def documents_dir():
-    """The real Documents folder (it may be redirected, e.g. to OneDrive)."""
-    try:
-        class GUID(ctypes.Structure):
-            _fields_ = [("d1", ctypes.c_uint32), ("d2", ctypes.c_uint16), ("d3", ctypes.c_uint16),
-                        ("d4", ctypes.c_ubyte * 8)]
-        u = uuid.UUID("FDD39AD0-238F-46AF-ADB4-6C85480369C7")      # FOLDERID_Documents
-        g = GUID(u.time_low, u.time_mid, u.time_hi_version, (ctypes.c_ubyte * 8)(*u.bytes[8:]))
-        p = ctypes.c_wchar_p()
-        if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(g), 0, None, ctypes.byref(p)) == 0:
-            path = Path(p.value)
-            ctypes.windll.ole32.CoTaskMemFree(p)
-            return path
-    except (AttributeError, OSError):
-        pass
-    return Path.home() / "Documents"
-
-
-SHARE_DIR = documents_dir() / "NWN GPS"
+from .config import SHARE_DIR, documents_dir
 EXPORTS, INBOX = SHARE_DIR / "Exports", SHARE_DIR / "Inbox"
 MERGED = INBOX / "merged"
 

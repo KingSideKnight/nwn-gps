@@ -19,6 +19,8 @@ from . import objects
 from .memory import GameMemory
 
 NO_GAME, MENU, LOADING, IN_GAME = "NO_GAME", "MENU", "LOADING", "IN_GAME"
+UNSUPPORTED = "UNSUPPORTED"   # game build whose memory layout we don't know: read nothing, inject nothing
+APP_MANAGER_EXPORT = b"?g_pAppManager@@3PEAVCAppManager@@EA"
 
 
 @dataclass
@@ -35,6 +37,39 @@ class Snapshot:
     pos: tuple = None
     facing: tuple = None
     area_ptr: int = None
+    nwsync: str = None       # the server's NWSync URL (where its custom content comes from)
+
+
+def find_export(mem, name):
+    """RVA of an exported symbol, read from the running module's export table."""
+    pe = mem.u32(mem.base + 0x3C)
+    exp_rva = mem.u32(mem.base + pe + 24 + 112)
+    if not exp_rva:
+        return None
+    d = mem.read(mem.base + exp_rva, 40)
+    nnames, afun, anames, aords = struct.unpack_from("<IIII", d, 24)
+    names = mem.read(mem.base + anames, nnames * 4)
+    lo, hi = 0, nnames - 1
+    while lo <= hi:                                   # export names are sorted: binary search
+        mid = (lo + hi) // 2
+        n = (mem.read(mem.base + struct.unpack_from("<I", names, mid * 4)[0], 128) or b"").split(b"\0", 1)[0]
+        if n == name:
+            ordinal = struct.unpack("<H", mem.read(mem.base + aords + mid * 2, 2))[0]
+            return mem.u32(mem.base + afun + ordinal * 4)
+        lo, hi = (mid + 1, hi) if n < name else (lo, mid - 1)
+    return None
+
+
+def check_layout(mem):
+    """(ok, detail): do our vtable addresses still belong to the classes we expect (RTTI)?"""
+    bad = []
+    for cls, rva in L.VTABLES.items():
+        col = mem.u64(mem.base + rva - 8)
+        td_rva = mem.u32(col + 12) if col else None
+        name = mem.cstr(mem.base + td_rva + 0x10, 64) if td_rva else None
+        if name != f".?AV{cls}@@":
+            bad.append(cls)
+    return (not bad, ", ".join(bad))
 
 
 def world_from(nwsync_url, module_name):
@@ -61,6 +96,16 @@ class Session:
             self.vt = {k: self.mem.base + v for k, v in L.VTABLES.items()}
             self.table = None
             self.log(f"attached to nwmain.exe pid {self.mem.pid}")
+            ok, detail = check_layout(self.mem)
+            am = find_export(self.mem, APP_MANAGER_EXPORT)
+            self.app_manager_rva = am or L.G_APP_MANAGER
+            if am and am != L.G_APP_MANAGER:
+                self.log(f"g_pAppManager moved to 0x{am:x} (game update?)")
+            self.unsupported = None if ok else (
+                "This game version isn't supported yet (memory layout changed: " + detail + "). "
+                "The GPS stays off; please check for an update.")
+            if self.unsupported:
+                self.log(self.unsupported)
             return True
         except (RuntimeError, OSError) as e:
             if "Access is denied" in str(e):
@@ -83,7 +128,7 @@ class Session:
     # --- reading ------------------------------------------------------------
     def _internal(self):
         m = self.mem
-        p = m.u64(m.base + L.G_APP_MANAGER)
+        p = m.u64(m.base + getattr(self, "app_manager_rva", L.G_APP_MANAGER))
         for off in L.CHAIN_CLIENT_INTERNAL:
             p = m.u64(p + off) if p else None
         return p
@@ -118,9 +163,10 @@ class Session:
         module = m.exostring(mod + L.MODULE_NAME)
         if not module:
             return Snapshot(MENU)
+        nwsync = m.exostring(mod + L.MODULE_NWSYNC_URL)
         s = Snapshot(LOADING, module=module,
                      server=m.exostring(mod + L.MODULE_SERVER_NAME) or module,
-                     world=world_from(m.exostring(mod + L.MODULE_NWSYNC_URL), module))
+                     world=world_from(nwsync, module), nwsync=nwsync)
         area = m.u64(mod + L.MODULE_CURRENT_AREA)
         if not area or m.u64(area) != self.vt["CNWCArea"]:
             return s
@@ -146,6 +192,8 @@ class Session:
             self.log("game exited")
             self._detach()
             snap = Snapshot(NO_GAME)
+        elif getattr(self, "unsupported", None):
+            snap = Snapshot(UNSUPPORTED)     # unknown game build: don't read anything
         else:
             try:
                 snap = self._read()
