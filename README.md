@@ -35,6 +35,10 @@ search 4 ms, whole-world route 76 ms, full-screen map frame 73 ms.
 - `native/` the in-game DLL (C, ~600 lines, no third-party code)
 - `tests/` unit tests; `recon/` reverse-engineering tools and notes (`recon/FINDINGS.md`)
 
+## License
+MIT (see `LICENSE`). Bundled third-party components: `THIRD_PARTY_NOTICES.txt`.
+Build a release with `python packaging/build_release.py` (needs PyInstaller).
+
 ## Supported game build
 Neverwinter Nights: Enhanced Edition 8193.37-17 (26c6e573, Oct 2025). Other builds are detected
 and refused until `layout.py` is updated (re-run `recon/find_vtables.py` and the probes).

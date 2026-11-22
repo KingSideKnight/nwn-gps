@@ -28,29 +28,39 @@ def main():
     if new.exists() and (not dll.exists() or new.stat().st_mtime > dll.stat().st_mtime):
         dll = new                                   # build.cmd couldn't replace a file in use
     out = DIST / "NWN-GPS"
-    if out.exists():
-        shutil.rmtree(out)
+    if out.exists():                 # keep runtime\: the game may have its DLL loaded from there
+        for child in out.iterdir():
+            if child.name != "runtime":
+                shutil.rmtree(child) if child.is_dir() else child.unlink()
+    stage = WORK / "dist"            # PyInstaller wipes its output folder, so build to a staging area
     run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--console",
-         "--name", "NWN-GPS", "--distpath", str(DIST), "--workpath", str(WORK), "--specpath", str(WORK),
+         "--name", "NWN-GPS", "--distpath", str(stage), "--workpath", str(WORK), "--specpath", str(WORK),
          "--collect-submodules", "nwngps",
          "--add-data", f"{dll};.",
          "--exclude-module", "nwngps.launcher_test",
          str(ROOT / "packaging" / "entry.py")], cwd=ROOT)
+    out.mkdir(parents=True, exist_ok=True)
+    for child in (stage / "NWN-GPS").iterdir():
+        dest = out / child.name
+        shutil.copytree(child, dest) if child.is_dir() else shutil.copy2(child, dest)
     # the bundled DLL is looked up by this exact name
     internal = out / "_internal"
     if (internal / dll.name).exists() and dll.name != "nwngps_gl.dll":
         (internal / dll.name).rename(internal / "nwngps_gl.dll")
-    shutil.copy2(ROOT / "USER_GUIDE.md", out / "USER_GUIDE.md")
+    for name in ("USER_GUIDE.md", "LICENSE", "THIRD_PARTY_NOTICES.txt"):
+        shutil.copy2(ROOT / name, out / (name + ".txt" if name == "LICENSE" else name))
     (out / "README.txt").write_text(
         f"NWN GPS {__version__}\r\n\r\nRun NWN-GPS.exe, then start Neverwinter Nights normally.\r\n"
         "Read USER_GUIDE.md for keys, map sharing, settings and troubleshooting.\r\n\r\n"
         "NWN GPS reads the game's memory and loads a small add-on into the running game to draw its\r\n"
-        "panel. It never changes game files. Check your server's rules about third-party tools.\r\n",
+        "panel. It never changes game files. Check your server's rules about third-party tools.\r\n\r\n"
+        "Free software under the MIT License (LICENSE.txt). Unofficial fan-made tool, not affiliated\r\n"
+        "with Wizards of the Coast or Beamdog (see THIRD_PARTY_NOTICES.txt).\r\n",
         encoding="utf-8")
     zpath = DIST / f"NWN-GPS-{__version__}.zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for f in out.rglob("*"):
-            if f.is_file():
+            if f.is_file() and "runtime" not in f.relative_to(out).parts:
                 z.write(f, Path("NWN-GPS") / f.relative_to(out))
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
     print(f"\nbuilt {out} ({size / 1e6:.1f} MB) and {zpath} ({zpath.stat().st_size / 1e6:.1f} MB)")

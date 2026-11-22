@@ -68,3 +68,8 @@ The panel always shows these keys at the bottom, so you don't need to memorise t
 - Maps: `%LOCALAPPDATA%\NWN GPS\<world>.sqlite`, with automatic backups in `backups\` before imports.
 - Nothing is uploaded anywhere. Sharing only happens when you send an exported file yourself.
 - To remove NWN GPS: delete its folder, `%LOCALAPPDATA%\NWN GPS` and `Documents\NWN GPS`.
+
+## License
+NWN GPS is free software under the MIT License (`LICENSE.txt`). It is an unofficial fan-made tool,
+not affiliated with Wizards of the Coast, Beamdog or any server. Bundled components and their
+licenses are listed in `THIRD_PARTY_NOTICES.txt`.
