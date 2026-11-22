@@ -4,6 +4,7 @@
   python -m nwngps.cli areas
   python -m nwngps.cli find <text>
   python -m nwngps.cli route <destination text> [--from <area resref>]
+  python -m nwngps.cli go <destination text> | --stop     set the in-game HUD's destination
   python -m nwngps.cli import-jsonl <transitions.jsonl>
 
 Without --from, `route` starts from where your character is right now (game must be running).
@@ -103,6 +104,17 @@ def main():
                 print(f"[{h['kind']:4}] {h['name']}  — {store.area_name(h['area'])}{where}")
         elif cmd == "route":
             cmd_route(store, args)
+        elif cmd == "go":
+            from .hud import set_target
+            if not args or args == ["--stop"]:
+                set_target(None)
+                print("destination cleared")
+            else:
+                hits = store.search(" ".join(args))
+                if not hits:
+                    sys.exit(f"nothing matches {' '.join(args)!r}")
+                set_target(" ".join(args))
+                print(f"destination: {hits[0]['name']} in {store.area_name(hits[0]['area'])}")
         elif cmd == "import-jsonl":
             n = 0
             for line in open(args[0], encoding="utf-8"):
