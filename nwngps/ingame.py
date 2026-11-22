@@ -126,7 +126,7 @@ def main():
         sys.exit(f"{DLL} not built: run native\\build.cmd")
     store, session, shm = Store(), Session(log=log), Shm()
     nav, query, pois, pois_area, injected_pid = None, object(), [], None, None
-    last_status = None
+    last_status, last_key, last_publish = None, None, 0.0
     log("in-game GPS running (Ctrl+C to stop)")
     try:
         while True:
@@ -152,7 +152,14 @@ def main():
                 pois = store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (snap.area,)).fetchall()
                 pois_area = snap.area
             g = nav.update(snap) if nav else None
-            shm.publish(panel.render(snap, g, pois, snap.size))
+            # redraw only when something visible changed (or as a 1 s heartbeat for the DLL)
+            key = (snap.state, snap.area, len(pois),
+                   tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
+                   tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
+                   (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)
+            if key != last_key or time.time() - last_publish > 1.0:
+                shm.publish(panel.render(snap, g, pois, snap.size))
+                last_key, last_publish = key, time.time()
             st = shm.status()
             if st[0] != (last_status or (None,))[0] or st[2] != (last_status or (0, 0, ""))[2]:
                 log(f"DLL: {STATES.get(st[0], st[0])}  frames={st[1]}  {st[2]}")

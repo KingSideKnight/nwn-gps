@@ -18,7 +18,16 @@ POI / area-transition database, routes between areas, and draws an overlay.
     python -m nwngps.cli route vineyard       # directions from where you stand
     python -m nwngps.cli stats
 
-Database: `data/arelith.sqlite` (git-ignored). Back it up by copying the file; delete it to start over.
+In-game panel (works in exclusive fullscreen; build once with `native\build.cmd`):
+
+    python -m nwngps.ingame "vineyard"        # loads native/build/nwngps_gl.dll into the running game
+    python -m nwngps.cli go "city gates"      # change destination while it runs
+    # Ctrl+C: the DLL unhooks and unloads itself; no game files are changed
+
+Alternatives: `python -m nwngps.overlay "<dest>" [--other-screen]` (desktop window, windowed/borderless
+or a second monitor) and `python -m nwngps.hud` (RivaTuner OSD text).
+
+Database: `data/nwnarelith_com.sqlite` (git-ignored). Back it up by copying the file; delete it to start over.
 
 ## Layout
 - `nwngps/memory.py` – read-only process memory access (scan, read, strings).
