@@ -44,6 +44,10 @@ class Live:
             b = m.read(area + L.AREA_RESREF, 16) or b""
             st["area"] = b.split(b"\0", 1)[0].decode("latin-1")
             st["area_name"] = m.exostring(area + L.AREA_NAME)
+            st["area_ptr"] = area
+            t = m.read(area + L.AREA_TILESET, 16) or b""
+            st["tileset"] = t.split(b"\0", 1)[0].decode("latin-1")
+            st["size"] = (m.u32(area + L.AREA_WIDTH), m.u32(area + L.AREA_HEIGHT))
         if cre and m.u64(cre) == self.vt_creature:
             st["pos"] = [round(v, 2) for v in struct.unpack("<fff", m.read(cre + L.OBJ_POS, 12))]
             st["facing"] = [round(v, 3) for v in struct.unpack("<fff", m.read(cre + L.OBJ_FACING, 12))]

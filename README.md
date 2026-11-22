@@ -12,6 +12,14 @@ POI / area-transition database, routes between areas, and draws an overlay.
   or delete the folder.
 - If a future step must touch a game file, it backs the file up first and ships a restore script.
 
+## Use (game running, not as administrator)
+    python -m nwngps.recorder                 # leave running while you play
+    python -m nwngps.cli find vineyard        # search areas, pins, doors
+    python -m nwngps.cli route vineyard       # directions from where you stand
+    python -m nwngps.cli stats
+
+Database: `data/arelith.sqlite` (git-ignored). Back it up by copying the file; delete it to start over.
+
 ## Layout
 - `nwngps/memory.py` – read-only process memory access (scan, read, strings).
 - `recon/` – reverse-engineering tools and notes (`FINDINGS.md`).

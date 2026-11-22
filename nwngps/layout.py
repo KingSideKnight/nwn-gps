@@ -34,6 +34,16 @@ AREA_NAME = 0x238      # char* (CExoString)
 AREA_WIDTH = 0x2A0     # int32 tiles (unverified: 10x10 seen)
 AREA_HEIGHT = 0x2A4
 
+AREA_PINS = 0x2B8      # CExoArrayList<CNWCMapPin*> {ptr, int size, int cap}
+AREA_OBJECT_IDS = 0x318  # CExoArrayList<OBJECT_ID>: every object in the area
+AREA_SOUND_IDS = 0x2C8   # CExoArrayList<OBJECT_ID>: sound objects
+AREA_PLACEABLE_IDS = 0x338
+
+# Client object table: hash array of node* indexed by (id & 0x7FFFFFFF) % N,
+# node = {u32 key, pad, CGameObject* obj, node* next}
+OBJTABLE_BUCKETS = 65536
+NODE_KEY, NODE_OBJ, NODE_NEXT = 0x0, 0x8, 0x10
+
 # CNWCMapPin
 PIN_TEXT = 0x178       # char* (CExoString)
 
