@@ -4,3 +4,5 @@ recon/out/
 data/
 native/build/
 runtime/
+dist/
+build/

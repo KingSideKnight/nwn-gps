@@ -1,4 +1,4 @@
-"""Search and routing over the recorded database.
+﻿"""Search and routing over the recorded database.
 
   python -m nwngps.cli stats
   python -m nwngps.cli areas
@@ -113,7 +113,7 @@ def main():
         elif cmd == "find":
             for h in store.search(" ".join(args)):
                 where = f" at ({h['x']:.0f}, {h['y']:.0f})" if h["x"] is not None else ""
-                print(f"[{h['kind']:4}] {h['name']}  — {store.area_name(h['area'])}{where}")
+                print(f"[{h['kind']:4}] {h['name']}  â€” {store.area_name(h['area'])}{where}")
         elif cmd == "route":
             cmd_route(store, args)
         elif cmd == "worldmap":
