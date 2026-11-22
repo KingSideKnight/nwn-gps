@@ -40,7 +40,8 @@ Field offsets live in `nwngps/layout.py`; `python -m nwngps.snapshot` prints cur
   2 map pins, 154 placeables, 0 triggers.
 - CNWCObject header: +0x08 object id, +0x30 CNWCArea*, +0x38 position xyz, +0x44 facing xyz.
 - CNWCArea: +0x118 id, +0x128 resref (char[16]), +0x150 tileset resref, +0x238 name (char*),
-  +0x2A0/+0x2A4 probably width/height in tiles (10x10 seen; positions 0..100 m fit).
+  width/height in tiles at +0x0C/+0x10. (An early guess of +0x2A0/+0x2A4 was wrong: that's the
+  size of a 10-entry list; it read 10x10 for every area.) Tile array: +0x298, CNWTile stride 0x60.
 - CNWCMapPin: +0x178 text. Arelith puts pins at transitions ("Northern Outskirts").
 - CNWCDoor: +0x170 name (e.g. "The Vineyard Nymph"), +0x1C8 tag; door objects are 0x1E0 apart.
 - CNWCModule: +0x18 name "Arelith", +0xB0 NWSync URL.

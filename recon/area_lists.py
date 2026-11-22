@@ -10,16 +10,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
-from nwngps.memory import GameMemory  # noqa: E402
-from nwngps.live import Live  # noqa: E402
+from nwngps.session import Session  # noqa: E402
 from nwngps import layout as L  # noqa: E402
 
 start = int(sys.argv[1], 16) if len(sys.argv) > 1 else 0x100
 end = int(sys.argv[2], 16) if len(sys.argv) > 2 else 0x400
-mem = GameMemory()
+session = Session(log=lambda m: None)
+session.poll()
+mem = session.mem
+if mem is None:
+    sys.exit("game not running")
 vt = {mem.base + int(v["vtable_rva"], 16): k
       for k, vs in json.loads((ROOT / "vtables.json").read_text())["classes"].items() for v in (vs or [])}
-inn = Live(mem)._internal()
+inn = session._internal()
 area = mem.u64(mem.u64(inn + L.INTERNAL_MODULE) + L.MODULE_CURRENT_AREA)
 print(f"area 0x{area:x}")
 data = mem.read(area, end)
@@ -37,4 +40,4 @@ for o in range(start, end - 15, 8):
         print("   as object ptrs:", dict(Counter(k for k in kinds if k)))
     else:
         print("   as u32:", " ".join(f"{d:08x}" for d in ds[:16]))
-mem.close()
+session.close()

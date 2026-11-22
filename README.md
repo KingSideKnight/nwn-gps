@@ -24,9 +24,13 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
     python -m unittest discover -s tests
 
 Settings: `Documents\NWN GPS\settings.json`. Data: `Documents\NWN GPS\data`, logs:
-`Documents\NWN GPS\logs` (set `NWNGPS_DATA` to override the data folder). Not AppData: packaged
-Windows apps (e.g. a terminal inside an MSIX app) get AppData silently redirected to a private copy. The in-game DLL is loaded from `<app folder>\runtime` (some systems block DLLs loaded
-from AppData).
+`Documents\NWN GPS\logs` (set `NWNGPS_DATA` to override the data folder). The in-game DLL is loaded
+from `<app folder>\runtime`, falling back to `Documents\NWN GPS\runtime`.
+
+Why not AppData: processes started from a packaged (MSIX) Windows app, such as a terminal inside one,
+get AppData silently redirected to a private per-app copy. Data, logs and the DLL written there are
+invisible to the same tool started from Explorer, and to the game. `pip install --user` is affected
+the same way, so install Pillow system-wide or use the packaged exe.
 
 Scale (synthetic, `recon/scale_test.py`): 3,888 areas, 145,800 POIs, 9,558 transitions = 26 MB;
 search 4 ms, whole-world route 76 ms, full-screen map frame 73 ms.
