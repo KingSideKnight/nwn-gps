@@ -27,7 +27,16 @@ In-game panel (works in exclusive fullscreen; build once with `native\build.cmd`
 Alternatives: `python -m nwngps.overlay "<dest>" [--other-screen]` (desktop window, windowed/borderless
 or a second monitor) and `python -m nwngps.hud` (RivaTuner OSD text).
 
-Database: `data/nwnarelith_com.sqlite` (git-ignored). Back it up by copying the file; delete it to start over.
+Database: `data/nwnarelith_com.sqlite` (git-ignored).
+
+Sharing maps with friends:
+
+    python -m nwngps.cli export my_map.sqlite              # safe copy, even while the GPS runs
+    python -m nwngps.cli merge their_map.sqlite --dry-run  # what would be added
+    python -m nwngps.cli merge their_map.sqlite            # backs yours up to data/backups first
+
+Scale (synthetic test, `recon/scale_test.py`): 3,888 areas, 145,800 POIs, 9,558 transitions = 26 MB;
+search 4 ms, whole-world route 76 ms, full-screen map frame 73 ms. Back it up by copying the file; delete it to start over.
 
 ## Layout
 - `nwngps/memory.py` – read-only process memory access (scan, read, strings).

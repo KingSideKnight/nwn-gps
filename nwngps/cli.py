@@ -149,6 +149,7 @@ def main():
                 print("added:", store.merge(other))
                 print(f"{before} -> {store.stats()}")
                 print(f"to undo: stop the GPS, then copy the backup over {store.path}")
+        elif cmd == "go":
             from .hud import set_target
             if not args or args == ["--stop"]:
                 set_target(None)
