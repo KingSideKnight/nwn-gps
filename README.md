@@ -36,6 +36,10 @@ search 4 ms, whole-world route 76 ms, full-screen map frame 73 ms.
 - `native/` the in-game DLL (C, ~600 lines, no third-party code)
 - `tests/` unit tests; `recon/` reverse-engineering tools and notes (`recon/FINDINGS.md`)
 
+## Security
+See [SECURITY.md](SECURITY.md) for the trust model, attack surfaces and protections
+(`tests/test_security.py` covers hostile map files, server content limits and DLL integrity).
+
 ## License
 MIT (see `LICENSE`). Bundled third-party components: `THIRD_PARTY_NOTICES.txt`.
 Build a release with `python packaging/build_release.py` (needs PyInstaller).

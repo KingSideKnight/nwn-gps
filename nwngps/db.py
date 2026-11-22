@@ -3,6 +3,7 @@
 Database file: <project>/data/<module>.sqlite (git-ignored; back it up by copying the file).
 """
 import math
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -72,6 +73,119 @@ VIA_MAX_DIST = 6.0        # metres: a pin/door this close to an exit labels the 
 
 def dist(ax, ay, bx, by):
     return math.hypot(ax - bx, ay - by)
+
+
+# ---- untrusted input (maps imported from other players) -----------------------------------
+MAX_IMPORT_BYTES = 512 * 1024 * 1024
+MAX_ROWS = {"areas": 50_000, "pois": 2_000_000, "transitions": 500_000, "area_tiles": 50_000}
+MAX_TILES = 64                      # NWN areas are at most 32x32 tiles; allow headroom
+MAX_COORD = MAX_TILES * 10 + 50     # metres
+RESREF = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+REQUIRED_TABLES = ("areas", "pois", "transitions")
+
+
+def open_untrusted(path):
+    """Open another player's database safely: read-only, defensive mode (no writes to the schema,
+    no dangerous pragmas), untrusted schema (no functions in views/triggers), integrity-checked,
+    and the expected objects must be real tables (not views)."""
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError(f"{path.name}: not a file")
+    if path.stat().st_size > MAX_IMPORT_BYTES:
+        raise ValueError(f"{path.name}: too large to be a GPS map ({path.stat().st_size // 2**20} MB)")
+    with open(path, "rb") as f:
+        if f.read(16) != b"SQLite format 3\0":
+            raise ValueError(f"{path.name} is not an NWN GPS map file")
+    con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        if hasattr(con, "setconfig"):
+            con.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)
+            con.setconfig(sqlite3.SQLITE_DBCONFIG_TRUSTED_SCHEMA, False)
+        con.execute("PRAGMA trusted_schema=OFF")
+        con.execute("PRAGMA query_only=ON")
+        kinds = dict(con.execute("SELECT name, type FROM sqlite_master WHERE name IN (?,?,?,?)",
+                                 (*REQUIRED_TABLES, "area_tiles")).fetchall())
+        if any(kinds.get(t) != "table" for t in REQUIRED_TABLES) or kinds.get("area_tiles", "table") != "table":
+            raise ValueError(f"{path.name} is not an NWN GPS map file")
+        if con.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise ValueError(f"{path.name} is damaged (integrity check failed)")
+    except sqlite3.DatabaseError as e:
+        con.close()
+        raise ValueError(f"{path.name} is not a readable map file ({e})") from None
+    except Exception:
+        con.close()
+        raise
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def _text(v, limit):
+    return v if isinstance(v, str) and 0 < len(v) <= limit and "\0" not in v else None
+
+
+def _num(v, lo=-MAX_COORD, hi=MAX_COORD):
+    return float(v) if isinstance(v, (int, float)) and math.isfinite(v) and lo <= v <= hi else None
+
+
+def _resref(v):
+    return v.lower() if isinstance(v, str) and RESREF.match(v) else None
+
+
+def clean_area(r):
+    resref = _resref(r.get("resref"))
+    if not resref:
+        return None
+    w, h = r.get("width"), r.get("height")
+    size_ok = isinstance(w, int) and isinstance(h, int) and 1 <= w <= MAX_TILES and 1 <= h <= MAX_TILES
+    return {"resref": resref, "name": _text(r.get("name"), 200), "tileset": _resref(r.get("tileset")),
+            "width": w if size_ok else None, "height": h if size_ok else None,
+            "server": _text(r.get("server"), 64), "first_seen": _num(r.get("first_seen"), 0, 4e9)}
+
+
+def clean_poi(r):
+    area, kind = _resref(r.get("area")), r.get("kind")
+    x, y, z = _num(r.get("x")), _num(r.get("y")), _num(r.get("z"), -1000, 1000)
+    if not area or kind not in ("pin", "door", "user") or x is None or y is None:
+        return None
+    return {"area": area, "kind": kind, "name": _text(r.get("name"), 200), "tag": _text(r.get("tag"), 64),
+            "x": x, "y": y, "z": z or 0.0}
+
+
+def clean_transition(r):
+    out = {"from_area": _resref(r.get("from_area")), "to_area": _resref(r.get("to_area"))}
+    for k in ("from_x", "from_y", "to_x", "to_y"):
+        out[k] = _num(r.get(k))
+    for k in ("from_z", "to_z"):
+        out[k] = _num(r.get(k), -1000, 1000) or 0.0
+    if None in (out["from_area"], out["to_area"], out["from_x"], out["from_y"], out["to_x"], out["to_y"]):
+        return None
+    out["from_server"], out["to_server"] = _text(r.get("from_server"), 64), _text(r.get("to_server"), 64)
+    out["kind"] = r.get("kind") if r.get("kind") in ("walk", "portal") else "walk"
+    out["confirmed"] = r.get("confirmed", 1) in (1, True)
+    return out
+
+
+def clean_tiles(r):
+    """A tile layout: w*h entries of [tile_id, orientation 0-3, height]."""
+    import json
+    resref, tileset, w, h = _resref(r.get("resref")), _resref(r.get("tileset")), r.get("width"), r.get("height")
+    if not (resref and tileset and isinstance(w, int) and isinstance(h, int)
+            and 1 <= w <= MAX_TILES and 1 <= h <= MAX_TILES):
+        return None
+    raw = r.get("tiles")
+    if not isinstance(raw, str) or len(raw) > w * h * 40 + 16:
+        return None
+    try:
+        tiles = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(tiles, list) or len(tiles) != w * h:
+        return None
+    for t in tiles:
+        if not (isinstance(t, list) and len(t) == 3 and all(isinstance(v, int) for v in t)
+                and 0 <= t[0] <= 100_000 and 0 <= t[1] <= 3 and -100 <= t[2] <= 100):
+            return None
+    return {"resref": resref, "tileset": tileset, "width": w, "height": h, "tiles": tiles}
 
 
 LEGACY_DATA = Path(__file__).resolve().parent.parent / "data"     # before release prep
@@ -263,13 +377,21 @@ class Store:
         return self.db.execute("SELECT * FROM pois WHERE id=?", (pid,)).fetchone()
 
     # --- sharing ------------------------------------------------------------
-    def export(self, dest):
-        """Consistent copy of this database (safe while the recorder is writing)."""
+    def export(self, dest, share=False):
+        """Consistent copy of this database (safe while the recorder is writing).
+        share=True strips when-you-played data (timestamps, visit counts) from the copy."""
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         out = sqlite3.connect(dest)
         with out:
             self.db.backup(out)
+        if share:
+            with out:
+                out.execute("UPDATE areas SET first_seen=NULL, last_seen=NULL, visits=0")
+                out.execute("UPDATE pois SET first_seen=NULL, last_seen=NULL")
+                out.execute("UPDATE transitions SET first_seen=NULL, last_seen=NULL")
+                out.execute("UPDATE area_tiles SET seen=NULL")
+            out.execute("VACUUM")             # don't leave the old values in free pages
         out.close()
         return dest
 
@@ -277,23 +399,25 @@ class Store:
         return self.export(DATA_DIR / "backups" / f"{self.path.stem}-{tag}-{time.strftime('%Y%m%d-%H%M%S')}.sqlite")
 
     def merge(self, other_path):
-        """Merge another player's database into this one. Areas fill in missing details, POIs and
-        transitions are de-duplicated by distance, tile layouts are added where we have none.
-        Returns counts of what was added. (For a dry run, merge into an export() copy.)"""
-        other = sqlite3.connect(f"file:{Path(other_path)}?mode=ro", uri=True)
-        other.row_factory = sqlite3.Row
-        tables = {r[0] for r in other.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "areas" not in tables:
-            raise ValueError(f"{other_path} is not an NWN GPS database")
+        """Merge another player's database into this one. The file is untrusted: it's opened
+        read-only in SQLite's defensive mode, integrity-checked, size- and row-limited, and every
+        value is validated (bad rows are skipped and counted as "rejected"). Areas fill in missing
+        details, POIs and transitions are de-duplicated by distance, tile layouts are added where we
+        have none. Returns counts of what was added. (For a dry run, merge into an export() copy.)"""
+        other = open_untrusted(other_path)
         added = {"areas": 0, "areas_updated": 0, "pois": 0, "transitions": 0, "transitions_seen_again": 0,
-                 "tile_layouts": 0}
+                 "tile_layouts": 0, "rejected": 0}
         try:
-            for r in other.execute("SELECT * FROM areas"):
-                r = dict(r)
+            tables = {r[0] for r in other.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for r in other.execute("SELECT * FROM areas LIMIT ?", (MAX_ROWS["areas"],)):
+                r = clean_area(dict(r))
+                if r is None:
+                    added["rejected"] += 1
+                    continue
                 mine = self.area(r["resref"])
                 if mine is None:
                     added["areas"] += 1
-                elif any(mine[k] is None and r.get(k) is not None for k in ("name", "tileset", "width", "height")):
+                elif any(mine[k] is None and r[k] is not None for k in ("name", "tileset", "width", "height")):
                     added["areas_updated"] += 1
                 self.db.execute(
                     """INSERT INTO areas(resref,name,tileset,width,height,first_seen,last_seen,visits,server)
@@ -302,25 +426,35 @@ class Store:
                          name=COALESCE(name,excluded.name), tileset=COALESCE(tileset,excluded.tileset),
                          width=COALESCE(width,excluded.width), height=COALESCE(height,excluded.height),
                          server=COALESCE(server,excluded.server),
-                         first_seen=MIN(first_seen,excluded.first_seen)""",
-                    (r["resref"], r.get("name"), r.get("tileset"), r.get("width"), r.get("height"),
-                     r.get("first_seen"), r.get("last_seen"), r.get("server")))
+                         first_seen=COALESCE(MIN(first_seen,excluded.first_seen),first_seen,excluded.first_seen)""",
+                    (r["resref"], r["name"], r["tileset"], r["width"], r["height"],
+                     r["first_seen"], r["first_seen"], r["server"]))
             before = self.stats()["pois"]
-            for r in other.execute("SELECT * FROM pois"):
+            for r in other.execute("SELECT * FROM pois LIMIT ?", (MAX_ROWS["pois"],)):
+                r = clean_poi(dict(r))
+                if r is None:
+                    added["rejected"] += 1
+                    continue
                 self.upsert_poi(r["area"], r["kind"], r["name"], r["tag"], r["x"], r["y"], r["z"])
             added["pois"] = self.stats()["pois"] - before
-            for r in other.execute("SELECT * FROM transitions"):
-                r = dict(r)
+            for r in other.execute("SELECT * FROM transitions LIMIT ?", (MAX_ROWS["transitions"],)):
+                r = clean_transition(dict(r))
+                if r is None:
+                    added["rejected"] += 1
+                    continue
                 _, new = self.add_transition(r["from_area"], (r["from_x"], r["from_y"], r["from_z"]),
                                              r["to_area"], (r["to_x"], r["to_y"], r["to_z"]),
-                                             r.get("from_server"), r.get("to_server"), r.get("kind") or "walk",
-                                             bool(r.get("confirmed", 1)))
+                                             r["from_server"], r["to_server"], r["kind"], r["confirmed"])
                 added["transitions" if new else "transitions_seen_again"] += 1
             if "area_tiles" in tables:
-                for r in other.execute("SELECT * FROM area_tiles"):
-                    if not self.db.execute("SELECT 1 FROM area_tiles WHERE resref=?", (r["resref"],)).fetchone():
-                        self.db.execute("INSERT INTO area_tiles(resref,tileset,width,height,tiles,seen) "
-                                        "VALUES(?,?,?,?,?,?)", tuple(r))
+                for r in other.execute("SELECT resref, tileset, width, height, tiles FROM area_tiles LIMIT ?",
+                                       (MAX_ROWS["area_tiles"],)):
+                    t = clean_tiles(dict(r))
+                    if t is None:
+                        added["rejected"] += 1
+                        continue
+                    if not self.db.execute("SELECT 1 FROM area_tiles WHERE resref=?", (t["resref"],)).fetchone():
+                        self.save_tiles(t["resref"], t["tileset"], t["width"], t["height"], t["tiles"])
                         added["tile_layouts"] += 1
             self.db.commit()
         finally:

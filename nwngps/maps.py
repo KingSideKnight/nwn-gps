@@ -19,6 +19,23 @@ from .db import DATA_DIR
 
 MAP_DIR = DATA_DIR / "maps"
 TILE_PX = 32
+MAX_AREA_TILES = 64                    # NWN areas are at most 32x32; anything bigger is bad data
+MAX_TEXTURE_SIDE = 1024                # minimap textures are 16-64 px; refuse to decode giants
+MAX_SET_BYTES = 16 * 1024 * 1024
+Image.MAX_IMAGE_PIXELS = 4096 * 4096   # Pillow's decompression-bomb guard, tightened
+
+
+def texture_size_ok(data):
+    """Check a texture's declared size before decoding it (server-supplied content)."""
+    if data[:4] == b"DDS ":
+        h, w = struct.unpack_from("<II", data, 12)
+    elif data[:8] == b"\x89PNG\r\n\x1a\n":
+        w, h = struct.unpack_from(">II", data, 16)
+    elif len(data) >= 18:                              # TGA has no magic; width/height at 12/14
+        w, h = struct.unpack_from("<HH", data, 12)
+    else:
+        return False
+    return 0 < w <= MAX_TEXTURE_SIDE and 0 < h <= MAX_TEXTURE_SIDE
 CACHE_MAX_BYTES = 300 * 1024 * 1024    # cached area images are rebuilt on demand, so cap the folder
 
 
@@ -76,6 +93,7 @@ class Maps:
         key = ("interior", name)
         if key not in self.sets:
             data = self.res.get(name, "set") if name else None
+            data = data if data and len(data) <= MAX_SET_BYTES else None
             m = re.search(rb"^Interior=(\d)", data or b"", re.M)
             self.sets[key] = (m.group(1) == b"1") if m else None
         return self.sets[key]
@@ -83,7 +101,8 @@ class Maps:
     def tileset(self, name):
         if name not in self.sets:
             data = self.res.get(name, "set")
-            self.sets[name] = parse_set(data.decode("latin-1")) if data else {}
+            ok = data and len(data) <= MAX_SET_BYTES
+            self.sets[name] = parse_set(data.decode("latin-1")) if ok else {}
         return self.sets[name]
 
     def texture(self, resref):
@@ -91,7 +110,7 @@ class Maps:
             img = None
             for ext in ("tga", "dds", "png"):
                 data = self.res.get(resref, ext)
-                if data:
+                if data and texture_size_ok(data):
                     try:
                         img = Image.open(io.BytesIO(data)).convert("RGBA").resize((TILE_PX, TILE_PX), Image.LANCZOS)
                         break
@@ -106,6 +125,9 @@ class Maps:
 
     def image(self, tileset, w, h, tiles):
         """North-up RGBA map of the area (w*32 x h*32), cached on disk by content."""
+        if not (isinstance(w, int) and isinstance(h, int) and 1 <= w <= MAX_AREA_TILES
+                and 1 <= h <= MAX_AREA_TILES and len(tiles) == w * h):
+            raise ValueError(f"implausible area size {w}x{h} ({len(tiles)} tiles)")
         path = MAP_DIR / f"{self.key(tileset, w, h, tiles)}.png"
         if path.exists():
             path.touch()                       # Windows doesn't always update access times: mark it used

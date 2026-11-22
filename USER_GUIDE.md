@@ -42,6 +42,9 @@ The panel always shows these keys at the bottom, so you don't need to memorise t
 - **Ctrl+Shift+E** saves your map to `Documents\NWN GPS\Exports`. Send that `.sqlite` file to a friend.
 - Put files you receive into `Documents\NWN GPS\Inbox`, then press **Ctrl+Shift+I**.
   Your own map is backed up first; merged files move to `Inbox\merged`.
+- Exported maps don't include when you played (times and visit counts are removed).
+- Imported files are checked thoroughly and anything invalid is skipped, but routes from a friend's
+  map are only as good as that map: **only import maps from people you trust.** See `SECURITY.md`.
 
 ## Settings
 `Documents\NWN GPS\settings.json` (created on first run). Close NWN GPS before editing.

@@ -133,7 +133,7 @@ def main():
                   f"{len(set(r['resref'] for r in store.db.execute('SELECT resref FROM areas')) - set(w.origin) - {i[3] for i in w.interiors})}")
         elif cmd == "export":
             dest = args[0] if args else f"{store.path.stem}-share-{time.strftime('%Y%m%d')}.sqlite"
-            print(f"exported {store.stats()} to {store.export(dest)}")
+            print(f"exported {store.stats()} to {store.export(dest, share=True)} (play times removed)")
         elif cmd == "merge":
             if not args:
                 sys.exit("usage: cli merge <their.sqlite> [--dry-run]")

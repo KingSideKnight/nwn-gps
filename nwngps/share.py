@@ -63,7 +63,7 @@ class Jobs:
             store = Store(self.world)
             try:
                 dest = EXPORTS / f"nwn-gps-{store.path.stem}-{time.strftime('%Y-%m-%d_%H%M')}.sqlite"
-                store.export(dest)
+                store.export(dest, share=True)       # no play times in files you send to others
                 st = store.stats()
             finally:
                 store.close()

@@ -51,7 +51,9 @@ def build(store, maps=None):
     exterior<->exterior edge crossings are placed geographically (stairs in a building can
     sit on its edges too)."""
     areas = {r["resref"]: r for r in store.db.execute("SELECT * FROM areas")}
-    size = {a: (r["width"] * 10, r["height"] * 10) for a, r in areas.items() if r["width"] and r["height"]}
+    size = {a: (r["width"] * 10, r["height"] * 10) for a, r in areas.items()
+            if isinstance(r["width"], int) and isinstance(r["height"], int)
+            and 1 <= r["width"] <= 64 and 1 <= r["height"] <= 64}
     interior = {a: (maps.is_interior(r["tileset"]) if maps else None) for a, r in areas.items()}
     geo = {}          # area -> [(neighbour, own_origin -> neighbour_origin offset)]
     door_links = []

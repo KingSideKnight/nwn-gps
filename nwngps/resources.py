@@ -14,16 +14,28 @@ RESTYPE = {"tga": 3, "txi": 2022, "set": 2013, "mdl": 2002, "dds": 2033, "are": 
 RESTYPE_EXT = {v: k for k, v in RESTYPE.items()}
 
 
+MAX_RESOURCE_BYTES = 64 * 1024 * 1024   # server content is untrusted: no decompression bombs
+
+
 def nsyc_decode(blob):
-    """NWSync blob: 'NSYC', version, algorithm (0 none, 2 zstd), uncompressed size, [zstd hdr] payload."""
+    """NWSync blob: 'NSYC', version, algorithm (0 none, 2 zstd), uncompressed size, [zstd hdr] payload.
+    Server-supplied, so output is capped at MAX_RESOURCE_BYTES and must match the declared size."""
     if blob[:4] != b"NSYC":
         return blob
     _ver, algo, size = struct.unpack_from("<III", blob, 4)
+    if size > MAX_RESOURCE_BYTES:
+        raise ValueError(f"NWSync resource too large ({size} bytes)")
     if algo == 0:
         return blob[16:16 + size]
     if algo == 2:
         start = blob.find(b"\x28\xb5\x2f\xfd", 16)     # zstd frame magic
-        return zstd.decompress(blob[start:])
+        if start < 0:
+            raise ValueError("NWSync resource: no zstd frame")
+        d = zstd.ZstdDecompressor()
+        out = d.decompress(blob[start:], max_length=size + 1)
+        if len(out) != size or not d.eof:
+            raise ValueError("NWSync resource: size doesn't match its header")
+        return out
     raise ValueError(f"unsupported NSYC compression {algo}")
 
 
@@ -48,7 +60,10 @@ class NWSync:
         for s in self.shards:
             row = s.execute("select data from resrefs where sha1=?", (r[0],)).fetchone()
             if row:
-                return nsyc_decode(row[0])
+                try:
+                    return nsyc_decode(row[0])
+                except (ValueError, zstd.ZstdError):
+                    return None                       # bad/hostile blob: treat as missing
         return None
 
 

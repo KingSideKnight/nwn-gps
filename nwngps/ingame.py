@@ -122,15 +122,21 @@ def runtime_dll(folder=None):
     """The newest build copied to <folder>/nwngps_gl-<hash>.dll (the file actually loaded; the hash
     means a rebuild never has to overwrite a file the game holds). None if folder isn't writable."""
     src = dll_source()
-    digest = hashlib.sha1(src.read_bytes()).hexdigest()[:10]
+    data = src.read_bytes()
+    digest = hashlib.sha1(data).hexdigest()[:10]
     folder = folder or runtime_dirs()[0]
     dst = folder / f"{DLL_PREFIX}-{digest}.dll"
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        if not dst.exists():
-            shutil.copy2(src, dst)
+        # Never trust a file by its name: it gets loaded into the game, so its bytes must be ours.
+        if not dst.exists() or hashlib.sha256(dst.read_bytes()).digest() != hashlib.sha256(data).digest():
+            tmp = dst.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(dst)
+        if hashlib.sha256(dst.read_bytes()).digest() != hashlib.sha256(data).digest():
+            return None
     except OSError:
-        return None
+        return None          # e.g. a tampered copy is in use and can't be replaced: skip this folder
     return dst
 
 
@@ -204,6 +210,8 @@ class Shm:
 
     def publish(self, img):
         w, h = img.size
+        if not (0 < w <= MAX_W and 0 < h <= MAX_H):
+            raise ValueError(f"frame {w}x{h} exceeds the shared buffer")
         seq = self.u32(O_SEQ)
         seq = seq + 1 if seq % 2 == 0 else seq
         struct.pack_into("<I", self.m, O_SEQ, seq)

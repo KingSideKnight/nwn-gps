@@ -18,10 +18,10 @@ MAX_VIEW = 1200.0     # metres across: bigger clusters show a window this wide t
 
 def frame_size(view_w, view_h, max_w=1600):
     """Render size with the game window's aspect ratio (the DLL scales it up)."""
-    if not view_w or not view_h:
-        return 1600, 900
-    s = min(1.0, max_w / view_w)
-    return max(640, int(view_w * s)), max(360, int(view_h * s))
+    if not view_w or not view_h or not (100 <= view_w <= 16384 and 100 <= view_h <= 16384):
+        return 1600, 900          # missing or implausible window size (it comes from shared memory)
+    s = min(1.0, max_w / view_w, 1600 / view_h)
+    return min(2048, max(640, int(view_w * s))), min(2048, max(360, int(view_h * s)))
 
 
 def _text(d, xy, s, size, color, bold=False, anchor="la"):
