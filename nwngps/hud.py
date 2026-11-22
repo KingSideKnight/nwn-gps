@@ -21,20 +21,31 @@ TARGET_FILE = DATA_DIR / "nav_target.json"
 GREEN, WHITE, GREY, GOLD = "4CD964", "FFFFFF", "9AA5AE", "F2C94C"
 
 
-def set_target(text):
-    """Used by `cli go`: write (or clear) the shared destination."""
+def set_target(text, pick=None):
+    """Write (or clear) the shared destination. `pick` = exact row chosen in the picker."""
     DATA_DIR.mkdir(exist_ok=True)
-    if text:
-        TARGET_FILE.write_text(json.dumps({"query": text, "t": time.time()}))
+    if text or pick:
+        TARGET_FILE.write_text(json.dumps({"query": text or pick["name"], "pick": pick, "t": time.time()}))
     elif TARGET_FILE.exists():
         TARGET_FILE.unlink()
 
 
 def read_target():
+    """The current destination record ({"query", "pick", "t"}) or None."""
     try:
-        return json.loads(TARGET_FILE.read_text())["query"]
-    except (OSError, ValueError, KeyError):
+        return json.loads(TARGET_FILE.read_text())
+    except (OSError, ValueError):
         return None
+
+
+def resolve_target(store, target):
+    """Destination row for the Navigator: the exact pick if there is one, else the best search hit."""
+    if not target:
+        return None
+    if target.get("pick"):
+        return target["pick"]
+    hits = store.search(target.get("query", ""))
+    return dict(hits[0]) if hits else None
 
 
 def turn_glyph(rel):
@@ -81,14 +92,10 @@ def main():
             q = read_target()
             if q != query:
                 query = q
-                nav = None
-                if q:
-                    hits = store.search(q)
-                    if hits:
-                        nav = Navigator(store, hits[0])
-                        print(f"destination: {hits[0]['name']} in {store.area_name(hits[0]['area'])}")
-                    else:
-                        print(f"nothing matches {q!r}")
+                dest = resolve_target(store, q)
+                nav = Navigator(store, dest) if dest else None
+                if dest:
+                    print(f"destination: {dest['name']} in {store.area_name(dest['area'])}")
             snap = session.poll()
             text = render(nav.update(snap) if nav else None, snap)
             if not osd.show(text) and not warned:

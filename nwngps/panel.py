@@ -17,6 +17,7 @@ BG = (16, 20, 24, 215)
 FG, DIM = (232, 238, 242, 255), (125, 138, 148, 255)
 PIN, DOOR, ME, ROUTE = (242, 201, 76, 255), (176, 122, 74, 255), (63, 193, 255, 255), (76, 217, 100, 255)
 MAP_BG, MAP_EDGE, GRID = (24, 32, 39, 230), (42, 54, 64, 255), (30, 40, 48, 255)
+ACCENT_RGBA = (63, 193, 255, 255)
 
 
 @lru_cache(maxsize=16)
@@ -55,11 +56,50 @@ def _text(d, x, y, s, size, color, bold=False, anchor="la", width=None):
     d.text((x * SS, y * SS), s, font=f, fill=color, anchor=anchor)
 
 
-def render(snap, g, pois, area_size=None):
+SEL_BG, INPUT_BG = (40, 62, 80, 255), (28, 36, 44, 255)
+
+
+def render_picker(picker, area_name):
+    """The destination picker: query box + results list."""
     img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
-    _text(d, 14, 12, (g.dest_name if g else "GPS")[:38], 11, FG, bold=True)
+    _text(d, 14, 12, "Where to?", 12, FG, bold=True)
+    d.rounded_rectangle((12 * SS, 38 * SS, (W - 12) * SS, 66 * SS), radius=5 * SS, fill=INPUT_BG,
+                        outline=ACCENT_RGBA, width=SS)
+    q = picker.query
+    shown = q if len(q) < 34 else "…" + q[-33:]
+    _text(d, 20, 52, shown + "|", 11, FG, anchor="lm")
+    if not q:
+        _text(d, 24, 52, "type to search areas, pins, doors", 10, DIM, anchor="lm")
+    label = "Results" if q.strip() else "Recent"
+    _text(d, 14, 76, label, 8, DIM)
+    y = 92
+    if not picker.results:
+        _text(d, 14, y, "No matches yet - explore with the recorder running" if q.strip()
+              else "No recent destinations", 9, DIM, width=W - 28)
+    for i, r in enumerate(picker.results):
+        if i == picker.sel:
+            d.rounded_rectangle((8 * SS, (y - 3) * SS, (W - 8) * SS, (y + 38) * SS), radius=5 * SS, fill=SEL_BG)
+        color = PIN if r["kind"] == "pin" else (ROUTE if r["kind"] == "clear" else FG)
+        tag = {"pin": "pin", "door": "door", "area": "area", "user": "mark", "clear": ""}.get(r["kind"], r["kind"])
+        _text(d, 16, y, (r["name"] or "")[:40], 10, color, bold=(i == picker.sel))
+        if r.get("area"):
+            _text(d, 16, y + 18, f"{tag} · {area_name(r['area'])}"[:52], 8, DIM)
+        y += 44
+        if y > H - 50:
+            break
+    _text(d, W / 2, H - 14, "↑↓ choose   Enter go   Esc cancel", 8, DIM, anchor="ms")
+    return img.resize((W, H), Image.LANCZOS)
+
+
+def render(snap, g, pois, area_size=None, hidden_hint=True):
+    img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
+    if hidden_hint:
+        _text(d, W - 14, 14, "Ctrl+Shift+F", 7, DIM, anchor="ra")
+    _text(d, 14, 12, (g.dest_name if g else "GPS")[:34], 11, FG, bold=True)
     if snap is None or snap.state != "IN_GAME":
         msg = {"NO_GAME": "Waiting for the game...", "MENU": "In menus", "LOADING": "Loading..."}.get(
             snap.state if snap else "", "Starting...")
@@ -68,7 +108,7 @@ def render(snap, g, pois, area_size=None):
     if g:
         _guidance(d, g)
     else:
-        _text(d, 14, 40, "No destination set", 10, DIM)
+        _text(d, 14, 40, "No destination. Press Ctrl+Shift+F to search.", 10, DIM, width=W - 28)
     _map(d, snap, g, pois, area_size)
     _text(d, 14, H - 12, (snap.area_name or snap.area or "")[:46], 8, DIM, anchor="ls")
     _text(d, W - 14, H - 12, (snap.server or "").replace("ARE_", ""), 8, DIM, anchor="rs")

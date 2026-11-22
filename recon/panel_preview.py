@@ -20,3 +20,11 @@ t = time.time()
 img = panel.render(s, g, pois, s.size)
 print("render ms", round((time.time() - t) * 1000, 1), img.size, img.mode)
 img.save(sys.argv[1])
+if len(sys.argv) > 2:   # also preview the picker
+    from types import SimpleNamespace
+    pk = SimpleNamespace(query="gat", sel=1, results=[
+        {"kind": "pin", "name": "City Gates", "area": "a"},
+        {"kind": "area", "name": "Cordor (The Walled City) Government District", "area": "b"},
+        {"kind": "door", "name": "The Vineyard Nymph [ad_wd_17]", "area": "c"}])
+    panel.render_picker(pk, lambda a: {"a": "Cordor (Northern Outskirts)", "b": "Government District",
+                                      "c": "Mercantile Building (Upper)"}[a]).save(sys.argv[2])
