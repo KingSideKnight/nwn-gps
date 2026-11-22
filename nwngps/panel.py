@@ -167,50 +167,104 @@ def _guidance(d, g):
         _text(d, 14, ARROW_Y + 42, g.line2, 8, DIM, width=W - 28)
 
 
+PIN_SNAP_DIST = 7.0   # metres: a map pin this close to a door is drawn on that door
+
+
+def display_pois(pois):
+    """Map pins snapped onto the door they label (builders place map-note waypoints a few metres
+    beside the doorway). Display only: the database keeps the true positions."""
+    doors = [p for p in pois if p["kind"] == "door"]
+    out = []
+    for p in pois:
+        p = dict(p)
+        if p["kind"] == "pin" and doors:
+            near = min(doors, key=lambda dr: (dr["x"] - p["x"]) ** 2 + (dr["y"] - p["y"]) ** 2)
+            if math.hypot(near["x"] - p["x"], near["y"] - p["y"]) <= PIN_SNAP_DIST:
+                p["x"], p["y"] = near["x"], near["y"]
+        out.append(p)
+    return out
+
+
+FOLLOW_VIEW = 120.0   # metres: larger areas show a window this big centred on you
+ART_PPM = 3.2         # tile-art pixels per metre (32 px per 10 m tile)
+
+
+def _view(s, w_m, h_m):
+    """(left, top, size) of the visible square in world metres (top = north edge)."""
+    big = max(w_m, h_m)
+    if big <= FOLLOW_VIEW:                       # whole area, centred
+        v = big
+        cx, cy = w_m / 2, h_m / 2
+    else:                                        # follow the player, clamped to the area
+        v = FOLLOW_VIEW
+        px, py = s.pos[:2]
+        cx = min(max(px, v / 2), w_m - v / 2) if w_m > v else w_m / 2
+        cy = min(max(py, v / 2), h_m - v / 2) if h_m > v else h_m / 2
+    return cx - v / 2, cy + v / 2, v
+
+
 def _map(img, d, s, g, pois, area_size, map_img=None):
     w_m, h_m = (area_size[0] * 10, area_size[1] * 10) if area_size and all(area_size) else (0, 0)
     if not w_m or not h_m:
         xs = [p["x"] for p in pois] + [s.pos[0]]
         ys = [p["y"] for p in pois] + [s.pos[1]]
         w_m, h_m = max(xs) + 10, max(ys) + 10
-    scale = (MAP_SIZE - 20) / max(w_m, h_m)
-    ox = 10 + (MAP_SIZE - 20 - w_m * scale) / 2
-    oy = MAP_Y + 10 + (MAP_SIZE - 20 - h_m * scale) / 2
+    side = MAP_SIZE - 20                         # panel pixels
+    left, top, v = _view(s, w_m, h_m)
+    scale = side / v                             # panel pixels per metre
 
-    def P(x, y):
-        return (ox + x * scale, oy + (h_m - y) * scale)
+    def P(x, y):                                 # world -> layer pixels (not supersampled)
+        return ((x - left) * scale, (top - y) * scale)
 
-    x0, y0 = P(0, h_m)
-    x1, y1 = P(w_m, 0)
-    d.rectangle((x0 * SS, y0 * SS, x1 * SS, y1 * SS), fill=MAP_BG, outline=MAP_EDGE, width=SS)
-    if map_img is not None and area_size and map_img.size == (area_size[0] * 32, area_size[1] * 32):
-        size = (max(1, round((x1 - x0) * SS)), max(1, round((y1 - y0) * SS)))
-        ck = (id(map_img), size)
-        if _scaled.get("key") != ck:
-            _scaled.update(key=ck, img=map_img.resize(size, Image.LANCZOS))
-        img.alpha_composite(_scaled["img"], (round(x0 * SS), round(y0 * SS)))
+    layer = Image.new("RGBA", (side * SS, side * SS), MAP_BG)
+    ld = ImageDraw.Draw(layer)
+    has_art = map_img is not None and area_size and map_img.size == (area_size[0] * 32, area_size[1] * 32)
+    if has_art:
+        box = (round(left * ART_PPM), round((h_m - top) * ART_PPM),
+               round((left + v) * ART_PPM), round((h_m - top + v) * ART_PPM))
+        ck = (id(map_img), box, side)
+        if _scaled.get("key") != ck:             # crop pads outside the area with transparency
+            _scaled.update(key=ck, img=map_img.crop(box).resize((side * SS, side * SS), Image.BILINEAR))
+        layer.alpha_composite(_scaled["img"])
     else:
-        for i in range(1, int(w_m // 10)):
+        for i in range(0, int(w_m // 10) + 1):
             gx = P(i * 10, 0)[0] * SS
-            d.line((gx, y0 * SS, gx, y1 * SS), fill=GRID, width=1)
-        for j in range(1, int(h_m // 10)):
+            ld.line((gx, P(0, h_m)[1] * SS, gx, P(0, 0)[1] * SS), fill=GRID, width=1)
+        for j in range(0, int(h_m // 10) + 1):
             gy = P(0, j * 10)[1] * SS
-            d.line((x0 * SS, gy, x1 * SS, gy), fill=GRID, width=1)
-    for p in pois:
+            ld.line((P(0, 0)[0] * SS, gy, P(w_m, 0)[0] * SS, gy), fill=GRID, width=1)
+    for p in display_pois(pois):
         px, py = P(p["x"], p["y"])
+        if p["kind"] == "door" and has_art:
+            continue        # the tile art already shows doors; a second marker beside it looks misaligned
         if p["kind"] == "pin":
-            d.ellipse(((px - 4) * SS, (py - 4) * SS, (px + 4) * SS, (py + 4) * SS), fill=PIN,
-                      outline=(0, 0, 0, 200), width=SS)
+            ld.ellipse(((px - 4) * SS, (py - 4) * SS, (px + 4) * SS, (py + 4) * SS), fill=PIN,
+                       outline=(0, 0, 0, 200), width=SS)
             label = (p["name"] or "")[:22]
             # dark halo so labels stay readable over the tile art
             for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                _text(d, px + 6 + dx * 0.6, py + dy * 0.6, label, 7, (0, 0, 0, 220), anchor="lm")
-            _text(d, px + 6, py, label, 7, PIN, anchor="lm")
+                _text(ld, px + 6 + dx * 0.6, py + dy * 0.6, label, 7, (0, 0, 0, 220), anchor="lm")
+            _text(ld, px + 6, py, label, 7, PIN, anchor="lm")
         else:
-            d.rectangle(((px - 2) * SS, (py - 2) * SS, (px + 2) * SS, (py + 2) * SS), fill=DOOR)
+            ld.rectangle(((px - 2) * SS, (py - 2) * SS, (px + 2) * SS, (py + 2) * SS), fill=DOOR)
+    _route_and_player(ld, s, g, pois, P)
+    ox, oy = 10, MAP_Y + 10
+    img.alpha_composite(layer, (ox * SS, oy * SS))
+    d.rectangle((ox * SS, oy * SS, (ox + side) * SS, (oy + side) * SS), outline=MAP_EDGE, width=SS)
+    if v < max(w_m, h_m):
+        _text(d, ox + side - 4, oy + side - 4, f"{v:.0f} m view", 7, DIM, anchor="rs")
+
+
+def _route_and_player(d, s, g, pois, P):
     mx, my = P(*s.pos[:2])
     if g and g.target:
-        tx, ty = P(*g.target)
+        target = g.target
+        doors = [p for p in pois if p["kind"] == "door"]
+        if doors:   # exits are recorded where you stood; draw them on the doorway itself
+            near = min(doors, key=lambda dr: (dr["x"] - target[0]) ** 2 + (dr["y"] - target[1]) ** 2)
+            if math.hypot(near["x"] - target[0], near["y"] - target[1]) <= PIN_SNAP_DIST:
+                target = (near["x"], near["y"])
+        tx, ty = P(*target)
         _dashed(d, mx, my, tx, ty, ROUTE)
         d.ellipse(((tx - 7) * SS, (ty - 7) * SS, (tx + 7) * SS, (ty + 7) * SS), outline=ROUTE, width=2 * SS)
     fx, fy = (s.facing or (0, 1, 0))[:2]
