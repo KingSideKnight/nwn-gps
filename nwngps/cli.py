@@ -75,6 +75,8 @@ def cmd_route(store, args):
         label = f'"{via["name"]}"' if via and via["name"] else f"exit at ({t['from_x']:.0f}, {t['from_y']:.0f})"
         dx, dy = t["from_x"] - pos[0], t["from_y"] - pos[1]
         hop = f"  [server transfer {t['from_server']} -> {t['to_server']}]" if t["kind"] == "portal" else ""
+        if t.get("assumed"):
+            hop += "  (assumed way back, not walked yet)"
         print(f" {i}. In {store.area_name(t['from_area'])}: go {direction(dx, dy)} ~{math.hypot(dx, dy):.0f} m "
               f"to {label} -> {store.area_name(t['to_area'])}{hop}")
         pos = (t["to_x"], t["to_y"])
