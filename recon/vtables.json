@@ -1,0 +1,99 @@
+{
+  "image_base": "0x140000000",
+  "classes": {
+    "CNWCArea": [
+      {
+        "vtable_rva": "0xe45a38",
+        "this_offset": 0
+      },
+      {
+        "vtable_rva": "0xe45aa0",
+        "this_offset": 272
+      }
+    ],
+    "CNWCDoor": [
+      {
+        "vtable_rva": "0xe52f68",
+        "this_offset": 0
+      }
+    ],
+    "CNWCTrigger": [
+      {
+        "vtable_rva": "0xe533f8",
+        "this_offset": 0
+      }
+    ],
+    "CNWCMapPin": [
+      {
+        "vtable_rva": "0xe72800",
+        "this_offset": 0
+      }
+    ],
+    "CNWCCreature": [
+      {
+        "vtable_rva": "0xe474e8",
+        "this_offset": 0
+      }
+    ],
+    "CNWCPlayer": [
+      {
+        "vtable_rva": "0xe3dfb8",
+        "this_offset": 0
+      }
+    ],
+    "CNWCModule": [
+      {
+        "vtable_rva": "0xe44d18",
+        "this_offset": 0
+      }
+    ],
+    "CNWCPlaceable": [
+      {
+        "vtable_rva": "0xe53950",
+        "this_offset": 0
+      }
+    ],
+    "CNWCObject": [
+      {
+        "vtable_rva": "0xe3bf58",
+        "this_offset": 0
+      }
+    ],
+    "CPanelAreaMap": [
+      {
+        "vtable_rva": "0xe59210",
+        "this_offset": 0
+      }
+    ],
+    "CGuiMapPin": [
+      {
+        "vtable_rva": "0xe4f978",
+        "this_offset": 0
+      }
+    ],
+    "CGuiMapSurface": [
+      {
+        "vtable_rva": "0xe59108",
+        "this_offset": 0
+      }
+    ],
+    "CGuiAreaLoadscreen": [
+      {
+        "vtable_rva": "0xe4c0a8",
+        "this_offset": 0
+      }
+    ],
+    "CNWCMessage": [
+      {
+        "vtable_rva": "0xe3dfa8",
+        "this_offset": 0
+      }
+    ],
+    "CNWArea": [
+      {
+        "vtable_rva": "0xdc2f00",
+        "this_offset": 0
+      }
+    ]
+  }
+}
