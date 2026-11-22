@@ -7,7 +7,7 @@ import math
 from PIL import Image, ImageDraw
 
 from . import worldmap
-from .panel import _arrow, _dashed, display_pois, font
+from .panel import TOAST_COLORS, _arrow, _dashed, display_pois, font
 
 BG = (10, 13, 16, 225)
 FG, DIM, ROUTE, ME, GOLD = (232, 238, 242, 255), (125, 138, 148, 255), (76, 217, 100, 255), \
@@ -37,7 +37,7 @@ class FullMap:
         """Call when the database may have changed (area change)."""
         self.world = worldmap.build(self.store, self.maps)
 
-    def render(self, size, snap, g, nav, area_map_img):
+    def render(self, size, snap, g, nav, area_map_img, toast=None):
         W, H = size
         img = Image.new("RGBA", (W, H), BG)
         d = ImageDraw.Draw(img)
@@ -81,6 +81,13 @@ class FullMap:
         if g:
             _text(d, (PAD, H - 12), f"To {g.dest_name}: {g.line1}"[:140], 9, FG, anchor="ls")
         _text(d, (W - PAD, H - 12), "Ctrl+Shift+M  close map", 9, DIM, anchor="rs")
+        if toast:
+            color = TOAST_COLORS.get(toast[1], TOAST_COLORS["info"])
+            tw = d.textlength(toast[0], font=font(10)) + 40
+            x0 = (W - tw) / 2
+            d.rounded_rectangle((x0, HEADER + 10, x0 + tw, HEADER + 48), radius=8, fill=(16, 22, 28, 245),
+                                outline=color, width=3)
+            _text(d, (W / 2, HEADER + 29), toast[0], 10, FG, anchor="mm")
         return img
 
     def _view(self, cid, here, aspect):

@@ -7,6 +7,8 @@ In the game:
   Ctrl+Shift+X   clear the destination (it also clears itself 10 s after you arrive)
   Ctrl+Shift+G   show / hide the panel
   Ctrl+Shift+M   full-screen world map (press again to close)
+  Ctrl+Shift+E   export your map to Documents\\NWN GPS\\Exports (to share)
+  Ctrl+Shift+I   import friends' maps from Documents\\NWN GPS\\Inbox (backs yours up first)
   Ctrl+Shift + drag the panel with the left mouse button to move it (position is saved)
 
 Loads the DLL from native/build into the running game (no game files change;
@@ -34,7 +36,12 @@ from .hud import read_target, resolve_target, set_target
 from .memory import MODULEENTRY32W, TH32CS_SNAPMODULE, k32
 from .nav import Navigator
 from .fullmap import FullMap, frame_size
-from .picker import EV_CHAR, EV_CLEAR, EV_FULLMAP, EV_KEY, EV_MOVED, EV_OPEN, EV_TOGGLE, Picker
+from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_MOVED, EV_OPEN, EV_TOGGLE,
+                     Picker)
+from . import share
+
+TOAST_SECONDS = 8.0
+INBOX_CHECK_EVERY = 10.0
 
 AUTO_CLEAR_AFTER = 10.0   # seconds standing at the destination before it clears itself
 KEY_NAMES = {0x0D: "Enter", 0x1B: "Esc", 0x26: "Up", 0x28: "Down", 0x08: "Backspace", 0x2E: "Delete",
@@ -234,6 +241,20 @@ class InGame:
         self.arrived_at = None
         self.maps, self.map_img = None, None
         self.fullmap, self.fullmap_r, self.last_img = False, None, None
+        self.toast = None                      # (text, kind, expires_at)
+        self.inbox_n, self.inbox_checked = 0, 0.0
+        self.jobs = share.Jobs(self.store.world, self.notify)
+        share.ensure_folders()
+
+    def notify(self, text, kind="info"):
+        """On-screen message in the panel (called from background jobs too)."""
+        self.toast = (text, kind, time.time() + TOAST_SECONDS)
+        self.inbox_checked = 0.0               # an import may have emptied the inbox
+        log(f"message: {text}")
+
+    def current_toast(self):
+        t = self.toast
+        return (t[0], t[1]) if t and time.time() < t[2] else None
 
     def apply_flags(self):
         """Visible when the panel is on, or the picker / full map is open; full screen for the map."""
@@ -277,6 +298,13 @@ class InGame:
             elif t == EV_CLEAR:
                 log("hotkey: clear destination")
                 set_target(None)
+            elif t == EV_EXPORT:
+                log("hotkey: export map")
+                self.notify("Exporting your map...", "info")
+                self.jobs.export()
+            elif t == EV_IMPORT:
+                log("hotkey: import maps from inbox")
+                self.jobs.import_inbox()
             elif t == EV_MOVED:
                 pos = self.shm.position()
                 save_position(pos)
@@ -358,11 +386,14 @@ class InGame:
                 self.fullmap_r.rebuild()          # the recorder may have added areas / links
         g = self.nav.update(snap) if self.nav else None
         self.auto_clear(g)
+        if time.time() - self.inbox_checked > INBOX_CHECK_EVERY:
+            self.inbox_n, self.inbox_checked = len(share.inbox_files()), time.time()
+        toast = self.current_toast()
         full = self.fullmap and not self.picker.open and snap.state == IN_GAME
         if self.picker.open:
             key = ("picker", self.picker.query, self.picker.sel, len(self.picker.results))
         else:
-            key = (full, snap.state, snap.area, len(self.pois),
+            key = (full, toast, self.inbox_n, snap.state, snap.area, len(self.pois),
                    tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                    tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
                    (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)
@@ -371,9 +402,9 @@ class InGame:
                 img = panel.render_picker(self.picker, self.store.area_name)
             elif full:
                 size = frame_size(self.shm.u32(O_VIEW_W), self.shm.u32(O_VIEW_H))
-                img = self.fullmap_r.render(size, snap, g, self.nav, self.map_img)
+                img = self.fullmap_r.render(size, snap, g, self.nav, self.map_img, toast)
             else:
-                img = panel.render(snap, g, self.pois, snap.size, self.map_img)
+                img = panel.render(snap, g, self.pois, snap.size, self.map_img, toast=toast, inbox=self.inbox_n)
             self.shm.publish(img)
             self.last_img, self.last_key, self.last_publish = img, key, time.time()
         elif time.time() - self.last_publish > 1.0 and self.last_img is not None:

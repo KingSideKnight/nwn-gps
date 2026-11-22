@@ -10,9 +10,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .nav import compass
 
-W, H = 320, 544
-LEGEND_Y = H - 56          # hotkey legend row
+W, H = 320, 566
+LEGEND_Y = H - 78          # hotkey legend rows
+LEGEND2_Y = H - 56
 DRAG_HINT_Y = H - 34       # "Ctrl+Shift + drag to move" (above the area/server footer)
+TOAST_COLORS = {"ok": (76, 217, 100, 255), "info": (63, 193, 255, 255), "warn": (242, 201, 76, 255),
+                "error": (255, 99, 99, 255)}
 SS = 2                                  # supersampling factor
 MAP_Y, MAP_SIZE, ARROW_Y = 178, 300, 108
 BG = (16, 20, 24, 215)
@@ -125,13 +128,41 @@ def render_picker(picker, area_name):
 
 
 HOTKEYS = [("F", "Search"), ("X", "Clear"), ("M", "Map"), ("G", "Hide")]
+HOTKEYS2 = [("E", "Export map"), ("I", "Import maps")]
 
 
-def render(snap, g, pois, area_size=None, map_img=None):
+def toast_banner(img, d, text, kind, y, width):
+    """A coloured message strip (export/import results etc.)."""
+    color = TOAST_COLORS.get(kind, TOAST_COLORS["info"])
+    f = font(9)
+    lines, cur = [], ""
+    for word in text.split():
+        t = (cur + " " + word).strip()
+        if d.textlength(t, font=f) > (width - 36) * SS and cur:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = t
+    lines = (lines + [cur])[:3]
+    h = 12 + 14 * len(lines)
+    d.rounded_rectangle((8 * SS, y * SS, (8 + width - 16) * SS, (y + h) * SS), radius=6 * SS,
+                        fill=(16, 22, 28, 245), outline=color, width=2 * SS)
+    d.rectangle((8 * SS, y * SS, 13 * SS, (y + h) * SS), fill=color)
+    for i, ln in enumerate(lines):
+        d.text((20 * SS, (y + 7 + i * 14) * SS), ln, font=f, fill=FG)
+
+
+def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
     img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
     _legend(d, LEGEND_Y, HOTKEYS, prefix="Ctrl+Shift")
+    _legend(d, LEGEND2_Y, HOTKEYS2, prefix="Ctrl+Shift")
+    if toast:
+        toast_banner(img, d, toast[0], toast[1], MAP_Y + 14, W)
+    elif inbox:
+        toast_banner(img, d, f"{inbox} shared map{'s' if inbox > 1 else ''} in your Inbox - "
+                             f"Ctrl+Shift+I to import", "info", MAP_Y + 14, W)
     _text(d, W / 2, DRAG_HINT_Y, "Ctrl+Shift + drag the panel to move it", 7, DIM, anchor="mm")
     _text(d, 14, 12, (g.dest_name if g else "GPS")[:34], 11, FG, bold=True)
     if snap is None or snap.state != "IN_GAME":
@@ -144,6 +175,11 @@ def render(snap, g, pois, area_size=None, map_img=None):
     else:
         _text(d, 14, 40, "No destination. Press Ctrl+Shift+F to choose one.", 10, DIM, width=W - 28)
     _map(img, d, snap, g, pois, area_size, map_img)
+    if toast:     # draw messages on top of the map
+        toast_banner(img, d, toast[0], toast[1], MAP_Y + 14, W)
+    elif inbox:
+        toast_banner(img, d, f"{inbox} shared map{'s' if inbox > 1 else ''} in your Inbox - "
+                             f"Ctrl+Shift+I to import", "info", MAP_Y + 14, W)
     _text(d, 14, H - 12, (snap.area_name or snap.area or "")[:46], 8, DIM, anchor="ls")
     _text(d, W - 14, H - 12, (snap.server or "").replace("ARE_", ""), 8, DIM, anchor="rs")
     return img.resize((W, H), Image.LANCZOS)

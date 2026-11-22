@@ -44,6 +44,8 @@
 #define EV_CLEAR 5u    /* Ctrl+Shift+X: clear the destination */
 #define EV_MOVED 6u    /* panel dropped after a Ctrl+Shift+drag; new anchor/offsets are in the header */
 #define EV_FULLMAP 7u  /* Ctrl+Shift+M: toggle the full-screen map */
+#define EV_EXPORT 8u   /* Ctrl+Shift+E: export the map database for sharing */
+#define EV_IMPORT 9u   /* Ctrl+Shift+I: merge maps waiting in the inbox folder */
 
 /* anchors: which screen corner the offsets are measured from */
 #define ANCHOR_TR 0u
@@ -478,6 +480,8 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (ctrl && shift && wp == 'G') { push_event(EV_TOGGLE, 0); g_swallow_char = 1; return 0; }
             if (ctrl && shift && wp == 'X') { push_event(EV_CLEAR, 0); g_swallow_char = 1; return 0; }
             if (ctrl && shift && wp == 'M') { push_event(EV_FULLMAP, 0); g_swallow_char = 1; return 0; }
+            if (ctrl && shift && wp == 'E') { push_event(EV_EXPORT, 0); g_swallow_char = 1; return 0; }
+            if (ctrl && shift && wp == 'I') { push_event(EV_IMPORT, 0); g_swallow_char = 1; return 0; }
             if (ctrl && shift && wp == 'F') {
                 if (!g_capturing) { set_capture(1); push_event(EV_OPEN, 0); }
                 g_swallow_char = 1;
