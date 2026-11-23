@@ -26,6 +26,7 @@ import mmap
 import shutil
 import struct
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -267,6 +268,27 @@ class InGame:
         self.jobs = share.Jobs(self.store.world, self.notify)
         share.ensure_folders()
         self.load_hotkeys()
+        self.pub_lock, self.stopping = threading.Lock(), False
+        threading.Thread(target=self.heartbeat, name="heartbeat", daemon=True).start()
+
+    def publish(self, img):
+        with self.pub_lock:
+            if not self.stopping:
+                self.shm.publish(img)
+                self.last_publish = time.time()
+
+    def heartbeat(self):
+        """Re-send the last frame while the main loop is busy. The DLL hides the panel after 3 s
+        without an update (so a dead GPS never leaves a stale panel); one-off work such as the
+        object-table scan at login (7 s seen) or a big world-map build must not trip that."""
+        while not self.stopping:
+            time.sleep(0.5)
+            img = self.last_img
+            if img is not None and time.time() - self.last_publish > 1.0:
+                try:
+                    self.publish(img)
+                except (ValueError, OSError):
+                    pass
 
     def load_hotkeys(self):
         """Hotkeys from settings.json -> the DLL's key table and the panel legend."""
@@ -476,11 +498,9 @@ class InGame:
                 img = self.fullmap_r.render(size, snap, g, self.nav, self.map_img, toast)
             else:
                 img = panel.render(snap, g, self.pois, snap.size, self.map_img, toast=toast, inbox=self.inbox_n)
-            self.shm.publish(img)
-            self.last_img, self.last_key, self.last_publish = img, key, time.time()
-        elif time.time() - self.last_publish > 1.0 and self.last_img is not None:
-            self.shm.publish(self.last_img)       # heartbeat: the DLL hides the panel if updates stop
-            self.last_publish = time.time()
+            self.publish(img)
+            self.last_img, self.last_key = img, key
+        # (while the loop is busy, heartbeat() keeps the last frame alive)
         st = self.shm.status()
         if self.last_status is None or st[0] != self.last_status[0] or st[2] != self.last_status[2]:
             log(f"DLL v{st[3]}: {STATES.get(st[0], st[0])}  frames={st[1]}  {st[2]}")
@@ -501,6 +521,8 @@ class InGame:
                 gone = unload_old(self.injected_pid, self.shm) if our_modules(self.injected_pid) else True
                 self.shm.set_flags(FLAG_UNLOAD)   # in case it was minimised: unload on its next frame
                 log("DLL unloaded" if gone else "DLL will unload on the game's next frame")
+            with self.pub_lock:
+                self.stopping = True
             self.shm.close()
             self.session.close()
             self.store.close()
