@@ -18,6 +18,8 @@ CONFLICT = 15.0      # metres: a link that would put an already-placed area this
 EXIT_EDGE = 20.0     # metres: an exit this close to an edge counts as an edge exit
 ENTRY_EDGE = 25.0    # entry waypoints are often placed further in
 OPPOSITE = {"N": "S", "S": "N", "E": "W", "W": "E"}
+OVERLAP_TOL = 2.0    # metres: areas overlapping less than this (rounding, waypoints) are fine
+MIN_SHARED = 10.0    # metres of common edge two joined areas keep when one is slid along it
 
 
 def edge_of(x, y, w_m, h_m, limit):
@@ -33,6 +35,7 @@ class World:
     cluster: dict = field(default_factory=dict)       # area -> cluster id
     interiors: list = field(default_factory=list)     # (parent area, x, y, interior area)
     conflicts: list = field(default_factory=list)     # (area, neighbour, metres off): links that disagree
+    slid: dict = field(default_factory=dict)          # area -> metres moved along its edge to clear an overlap
 
     def to_world(self, area, x, y):
         o = self.origin.get(area)
@@ -57,7 +60,7 @@ def build(store, maps=None):
             if isinstance(r["width"], int) and isinstance(r["height"], int)
             and 1 <= r["width"] <= 64 and 1 <= r["height"] <= 64}
     interior = {a: (maps.is_interior(r["tileset"]) if maps else None) for a, r in areas.items()}
-    geo = {}          # area -> [(neighbour, own_origin -> neighbour_origin offset)]
+    geo = {}          # area -> [(neighbour, own_origin -> neighbour_origin offset, axis it may slide on)]
     door_links = []
     # Only walk/portal links say where areas are. Untrusted jumps and anything to do with dying
     # are left out entirely (a spell cast at a map edge must not glue two areas together).
@@ -84,8 +87,9 @@ def build(store, maps=None):
                 off = (wa, t["from_y"] - t["to_y"])
             else:
                 off = (-wb, t["from_y"] - t["to_y"])
-            geo.setdefault(a, []).append((b, off))
-            geo.setdefault(b, []).append((a, (-off[0], -off[1])))
+            axis = "x" if ea in "NS" else "y"        # areas joined N/S can slide east-west, and vice versa
+            geo.setdefault(a, []).append((b, off, axis))
+            geo.setdefault(b, []).append((a, (-off[0], -off[1]), axis))
         else:
             door_links.append(t)
     w = World(size=size)
@@ -98,7 +102,7 @@ def build(store, maps=None):
         q = deque([start])
         while q:
             a = q.popleft()
-            for b, (dx, dy) in geo.get(a, []):
+            for b, (dx, dy), _axis in geo.get(a, []):
                 want = (w.origin[a][0] + dx, w.origin[a][1] + dy)
                 if b not in w.origin:
                     w.origin[b] = want
@@ -108,6 +112,7 @@ def build(store, maps=None):
                     off = math.hypot(w.origin[b][0] - want[0], w.origin[b][1] - want[1])
                     if off > CONFLICT and a < b:      # each pair once
                         w.conflicts.append((a, b, round(off, 1)))
+        _settle(w, geo, cid)
         cid += 1
     # interiors: attach each unplaced area to the first placed area that leads into it
     for t in door_links:
@@ -126,6 +131,71 @@ def build(store, maps=None):
                 w.interiors.append((p[0], p[1], p[2], b))
                 changed = True
     return w
+
+
+def overlap(world, a, b):
+    """(x, y) metres by which two placed areas' rectangles overlap (<= 0: they don't)."""
+    (ax, ay), (aw, ah) = world.origin[a], world.size[a]
+    (bx, by), (bw, bh) = world.origin[b], world.size[b]
+    return min(ax + aw, bx + bw) - max(ax, bx), min(ay + ah, by + bh) - max(ay, by)
+
+
+def _settle(w, geo, cid):
+    """Arrival waypoints are often well along the edge from the exit (Cordor Frontier -> Bramble
+    Woods: 35 m), so lining links up exactly can stack areas on top of each other. An area whose
+    joins all run along one axis (e.g. only an east edge) can slide along it without breaking
+    any join: slide it the least distance that clears the overlap, keeping MIN_SHARED metres of
+    every shared edge. Areas joined on two axes stay put (the map draws one over the other)."""
+    members = [a for a, c in w.cluster.items() if c == cid]
+    hit = lambda a, b: all(v > OVERLAP_TOL for v in overlap(w, a, b))
+    for _ in range(len(members)):
+        moved = False
+        for a in members:
+            for b in members:
+                if a >= b or not hit(a, b):
+                    continue
+                # move the less-connected one (a dead end before a crossroads), then the smaller
+                for mover, other in sorted(((a, b), (b, a)), key=lambda p: (len({n for n, _, _ in geo[p[0]]}),
+                                                                       w.size[p[0]][0] * w.size[p[0]][1])):
+                    if _slide(w, geo, members, mover, other):
+                        moved = True
+                        break
+        if not moved:
+            return
+
+
+def _slide(w, geo, members, mover, other):
+    axes = {axis for _, _, axis in geo[mover]}
+    if len(axes) != 1:
+        return False
+    i = 0 if axes.pop() == "x" else 1
+    lo, size = w.origin[mover][i], w.size[mover][i]
+    olo, osize = w.origin[other][i], w.size[other][i]
+    for shift in sorted((olo + osize - lo, olo - (lo + size)), key=abs):
+        old = w.origin[mover]
+        w.origin[mover] = (old[0] + shift, old[1]) if i == 0 else (old[0], old[1] + shift)
+        clear = all(not all(v > OVERLAP_TOL for v in overlap(w, mover, m)) for m in members if m != mover)
+        joined = all(overlap(w, mover, n)[i] >= MIN_SHARED for n, _, _ in geo[mover])
+        if clear and joined:
+            w.slid[mover] = w.slid.get(mover, 0.0) + shift
+            return True
+        w.origin[mover] = old
+    return False
+
+
+def draw_order(world, cid):
+    """Areas of a cluster in drawing order: what's drawn later covers what's under it."""
+    return [a for a, c in world.cluster.items() if c == cid]
+
+
+def covered(world, order, area, wx, wy):
+    """Is world point (wx, wy) of `area` under an area drawn after it?"""
+    later = order[order.index(area) + 1:] if area in order else []
+    for b in later:
+        (bx, by), (bw, bh) = world.origin[b], world.size[b]
+        if bx + 1 < wx < bx + bw - 1 and by + 1 < wy < by + bh - 1:
+            return True
+    return False
 
 
 def home_of(world, area):
@@ -238,12 +308,15 @@ def _markers(d, world, store, cid, P, out_w, out_h, names, pin_labels=True):
     from .panel import display_pois
     taken = [d.textbbox((cx, ty), name, font=_font(14, True), anchor="mt") for cx, ty, name in names]
     visible = lambda px, py: -20 <= px < out_w + 20 and -20 <= py < out_h + 20
+    order = draw_order(world, cid)
     doors, labelled = {}, set()
     for parent, x, y, inner in world.interiors:
         if world.cluster.get(parent) != cid or (parent, round(x), round(y)) in labelled:
             continue          # one label per door (deeper floors share their building's door)
         labelled.add((parent, round(x), round(y)))
         doors.setdefault(parent, []).append((x, y))
+        if covered(world, order, parent, *world.to_world(parent, x, y)):
+            continue          # under an area drawn on top: its markers would bleed through
         px, py = P(*world.to_world(parent, x, y))
         if not visible(px, py):
             continue
@@ -257,7 +330,10 @@ def _markers(d, world, store, cid, P, out_w, out_h, names, pin_labels=True):
                 continue
             if any(math.hypot(p["x"] - x, p["y"] - y) <= PIN_NEAR_DOOR for x, y in doors.get(a, ())):
                 continue      # the building marker there already says where it goes
-            px, py = P(*world.to_world(a, p["x"], p["y"]))
+            wx, wy = world.to_world(a, p["x"], p["y"])
+            if covered(world, order, a, wx, wy):
+                continue
+            px, py = P(wx, wy)
             if not visible(px, py):
                 continue
             d.ellipse((px - 4, py - 4, px + 4, py + 4), fill=GOLD, outline=(0, 0, 0, 255))
