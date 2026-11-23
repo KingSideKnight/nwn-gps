@@ -49,3 +49,17 @@ class Launcher(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JobObjectTest(unittest.TestCase):
+    def test_child_dies_with_job(self):
+        import subprocess, sys
+        from nwngps import launcher
+        assign = launcher.kill_with_launcher_job()
+        self.assertIsNotNone(assign)
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            self.assertTrue(assign(p))
+        finally:
+            p.kill()
+            p.wait()

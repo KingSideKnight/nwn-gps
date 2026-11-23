@@ -33,7 +33,7 @@ from . import maps, panel
 from .resources import Resources
 from .db import DATA_DIR, Store
 from .hud import read_target, resolve_target, set_target
-from .memory import MODULEENTRY32W, TH32CS_SNAPMODULE, k32
+from .memory import k32, modules
 from .nav import Navigator
 from .fullmap import FullMap, frame_size
 from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_MOVED, EV_OPEN, EV_TOGGLE,
@@ -87,19 +87,8 @@ def log(m):
 
 
 def our_modules(pid):
-    """Names of our DLLs currently loaded in the game."""
-    snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid)
-    m = MODULEENTRY32W(dwSize=ctypes.sizeof(MODULEENTRY32W))
-    out = []
-    try:
-        ok = k32.Module32FirstW(snap, ctypes.byref(m))
-        while ok:
-            if m.szModule.lower().startswith(DLL_PREFIX):
-                out.append(m.szModule.lower())
-            ok = k32.Module32NextW(snap, ctypes.byref(m))
-    finally:
-        k32.CloseHandle(snap)
-    return out
+    """Names of our DLLs currently loaded in the game ([] if the game is gone or still starting)."""
+    return [n.lower() for n, _ in modules(pid) if n.lower().startswith(DLL_PREFIX)]
 
 
 def runtime_dirs():

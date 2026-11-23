@@ -4,7 +4,7 @@
 
 Both wait for the game, so you can start this before or after NWN. A part that
 crashes is restarted after a few seconds. Ctrl+C (or closing the window) stops
-both; on Ctrl+C the in-game GPS unloads its DLL from the game first.
+both; the parts are in a job object, so they can't outlive the launcher.
 Logs: Documents\\NWN GPS\\logs.
 """
 import subprocess
@@ -36,6 +36,41 @@ NOTICE = """
 """
 
 
+def kill_with_launcher_job():
+    """A Windows job object that kills every process in it when the launcher exits, however it
+    exits (Ctrl+C, closing the window, a crash). The parts run without a console window, so they
+    never hear about the window being closed and used to keep running on their own. None if
+    unavailable (non-Windows, or the job can't be created): then we just don't get the guarantee."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    import ctypes.wintypes as wt
+
+    class LIMIT(ctypes.Structure):     # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (x64 layout)
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wt.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wt.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wt.DWORD),
+                    ("SchedulingClass", wt.DWORD), ("IoCounters", ctypes.c_uint64 * 6),
+                    ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wt.HANDLE
+    k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wt.LPCWSTR]
+    k32.SetInformationJobObject.argtypes = [wt.HANDLE, ctypes.c_int, ctypes.c_void_p, wt.DWORD]
+    k32.AssignProcessToJobObject.argtypes = [wt.HANDLE, wt.HANDLE]
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    info = LIMIT(LimitFlags=0x2000)    # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+        return None                    # 9 = JobObjectExtendedLimitInformation
+    return lambda proc: bool(k32.AssignProcessToJobObject(job, int(proc._handle)))
+
+
+JOB = None
+
+
 def command(part):
     if config.frozen():
         return [sys.executable, part]
@@ -51,6 +86,8 @@ def start(part):
     p = subprocess.Popen(command(part), stdout=log, stderr=subprocess.STDOUT, creationflags=flags,
                          cwd=config.app_dir())       # so `-m nwngps` finds the package from any folder
     p.started_at = time.time()
+    if JOB:
+        JOB(p)
     return p
 
 
@@ -95,6 +132,8 @@ def main():
     from . import hotkeys
     hk = hotkeys.resolve(config.load_settings()["hotkeys"], warn=lambda m: print("  " + m))
     print("  in game: " + ", ".join(f"{v[2]} {hotkeys.LABELS[a].lower()}" for a, v in hk.items()))
+    global JOB
+    JOB = kill_with_launcher_job()
     procs = {name: start(part) for name, part in PARTS.items()}
     died_at, fast_crashes, given_up = {}, {name: 0 for name in PARTS}, set()
     try:

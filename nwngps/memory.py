@@ -43,6 +43,12 @@ class MEMORY_BASIC_INFORMATION(ctypes.Structure):
 
 
 k32.CreateToolhelp32Snapshot.restype = wt.HANDLE
+k32.CreateToolhelp32Snapshot.argtypes = [wt.DWORD, wt.DWORD]
+k32.CloseHandle.argtypes = [wt.HANDLE]
+k32.Module32FirstW.argtypes = k32.Module32NextW.argtypes = [wt.HANDLE, ctypes.POINTER(MODULEENTRY32W)]
+k32.Process32FirstW.argtypes = k32.Process32NextW.argtypes = [wt.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+INVALID_HANDLE = ctypes.c_void_p(-1).value
+ERROR_BAD_LENGTH = 24
 k32.OpenProcess.restype = wt.HANDLE
 k32.ReadProcessMemory.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
                                   ctypes.POINTER(ctypes.c_size_t)]
@@ -51,8 +57,39 @@ k32.VirtualQueryEx.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.POINTER(MEMORY
 k32.VirtualQueryEx.restype = ctypes.c_size_t
 
 
+def _snapshot(flags, pid):
+    """A toolhelp snapshot handle, or None. Module snapshots of a process that is still starting
+    (or exiting) fail with ERROR_BAD_LENGTH for a moment: retry that a few times."""
+    for _ in range(5):
+        snap = k32.CreateToolhelp32Snapshot(flags, pid)
+        if snap and snap != INVALID_HANDLE:
+            return snap
+        if ctypes.get_last_error() != ERROR_BAD_LENGTH:
+            break
+    return None
+
+
+def modules(pid):
+    """(name, base address) of every module loaded in a process; [] if it can't be listed."""
+    snap = _snapshot(TH32CS_SNAPMODULE, pid)
+    if snap is None:
+        return []
+    m = MODULEENTRY32W(dwSize=ctypes.sizeof(MODULEENTRY32W))
+    out = []
+    try:
+        ok = k32.Module32FirstW(snap, ctypes.byref(m))
+        while ok:
+            out.append((m.szModule, m.modBaseAddr))
+            ok = k32.Module32NextW(snap, ctypes.byref(m))
+    finally:
+        k32.CloseHandle(snap)
+    return out
+
+
 def find_pid(exe_name="nwmain.exe"):
-    snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    snap = _snapshot(TH32CS_SNAPPROCESS, 0)
+    if snap is None:
+        return None
     e = PROCESSENTRY32W(dwSize=ctypes.sizeof(PROCESSENTRY32W))
     try:
         ok = k32.Process32FirstW(snap, ctypes.byref(e))
@@ -73,20 +110,17 @@ class GameMemory:
         self.h = k32.OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, False, self.pid)
         if not self.h:
             raise ctypes.WinError(ctypes.get_last_error())
-        self.base = self._module_base(exe_name)
+        try:
+            self.base = self._module_base(exe_name)
+        except RuntimeError:
+            k32.CloseHandle(self.h)
+            raise
 
     def _module_base(self, exe_name):
-        snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, self.pid)
-        m = MODULEENTRY32W(dwSize=ctypes.sizeof(MODULEENTRY32W))
-        try:
-            ok = k32.Module32FirstW(snap, ctypes.byref(m))
-            while ok:
-                if m.szModule.lower() == exe_name.lower():
-                    return m.modBaseAddr
-                ok = k32.Module32NextW(snap, ctypes.byref(m))
-        finally:
-            k32.CloseHandle(snap)
-        raise RuntimeError("module base not found")
+        for name, base in modules(self.pid):
+            if name.lower() == exe_name.lower() and base:
+                return base
+        raise RuntimeError("module base not found (game still starting?)")
 
     def close(self):
         k32.CloseHandle(self.h)
