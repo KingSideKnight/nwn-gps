@@ -25,6 +25,24 @@ MAX_SET_BYTES = 16 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 4096 * 4096   # Pillow's decompression-bomb guard, tightened
 
 
+def bioware_dds(data):
+    """NWN's own DDS variant (custom tilesets, e.g. Arelith's tdm01): a 20-byte header
+    (width, height, channels 3 = DXT1 / 4 = DXT5, bytes of the top level, alpha float) and then
+    the mip levels. Returns the top level as a standard DDS file, or None if it isn't one."""
+    if len(data) < 20 or data[:4] == b"DDS ":
+        return None
+    w, h, channels, size = struct.unpack_from("<4I", data)
+    if channels not in (3, 4) or not (0 < w <= MAX_TEXTURE_SIDE and 0 < h <= MAX_TEXTURE_SIDE):
+        return None
+    block = 8 if channels == 3 else 16
+    if size != max(1, (w + 3) // 4) * max(1, (h + 3) // 4) * block or len(data) < 20 + size:
+        return None
+    pixel_format = struct.pack("<II4s5I", 32, 0x4, b"DXT1" if channels == 3 else b"DXT5", 0, 0, 0, 0, 0)
+    header = struct.pack("<7I44x", 124, 0x1007 | 0x80000, h, w, size, 0, 1) + pixel_format + \
+        struct.pack("<5I", 0x1000, 0, 0, 0, 0)
+    return b"DDS " + header + data[20:20 + size]
+
+
 def texture_size_ok(data):
     """Check a texture's declared size before decoding it (server-supplied content)."""
     if data[:4] == b"DDS ":
@@ -110,6 +128,8 @@ class Maps:
             img = None
             for ext in ("tga", "dds", "png"):
                 data = self.res.get(resref, ext)
+                if data and ext == "dds" and data[:4] != b"DDS ":
+                    data = bioware_dds(data)
                 if data and texture_size_ok(data):
                     try:
                         img = Image.open(io.BytesIO(data)).convert("RGBA").resize((TILE_PX, TILE_PX), Image.LANCZOS)
