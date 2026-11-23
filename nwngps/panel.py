@@ -214,7 +214,8 @@ def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
     elif inbox:
         toast_banner(img, d, f"{inbox} shared map{'s' if inbox > 1 else ''} in your Inbox - "
                              f"{KEYTEXT['import']} to import", "info", MAP_Y + 14, W)
-    _text(d, 14, H - 12, (snap.area_name or snap.area or "")[:46], 8, DIM, anchor="ls")
+    if g:     # without a destination the area is in the title already
+        _text(d, 14, H - 12, (snap.area_name or snap.area or "")[:46], 8, DIM, anchor="ls")
     _text(d, W - 14, H - 12, (snap.server or "").replace("ARE_", ""), 8, DIM, anchor="rs")
     return img.resize((W, H), Image.LANCZOS)
 
