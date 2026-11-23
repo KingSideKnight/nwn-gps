@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from PIL import Image, ImageDraw, ImageFont
 
+CONFLICT = 15.0      # metres: a link that would put an already-placed area this far off disagrees
 EXIT_EDGE = 20.0     # metres: an exit this close to an edge counts as an edge exit
 ENTRY_EDGE = 25.0    # entry waypoints are often placed further in
 OPPOSITE = {"N": "S", "S": "N", "E": "W", "W": "E"}
@@ -31,6 +32,7 @@ class World:
     size: dict = field(default_factory=dict)          # area -> (w_m, h_m)
     cluster: dict = field(default_factory=dict)       # area -> cluster id
     interiors: list = field(default_factory=list)     # (parent area, x, y, interior area)
+    conflicts: list = field(default_factory=list)     # (area, neighbour, metres off): links that disagree
 
     def to_world(self, area, x, y):
         o = self.origin.get(area)
@@ -57,9 +59,18 @@ def build(store, maps=None):
     interior = {a: (maps.is_interior(r["tileset"]) if maps else None) for a, r in areas.items()}
     geo = {}          # area -> [(neighbour, own_origin -> neighbour_origin offset)]
     door_links = []
-    for t in store.transitions(include_unconfirmed=True):
+    # Only walk/portal links say where areas are. Untrusted jumps and anything to do with dying
+    # are left out entirely (a spell cast at a map edge must not glue two areas together).
+    # Most-used links first, so one odd link can't outvote a well-trodden one.
+    links = sorted(store.transitions(include_unconfirmed=True), key=lambda t: -(t["count"] or 1))
+    for t in links:
         a, b = t["from_area"], t["to_area"]
-        if a not in size or b not in size or a == b:
+        kind = t["kind"] or "walk"
+        if a not in size or b not in size or a == b or kind in ("death", "respawn"):
+            continue
+        if kind == "jump":
+            if t["confirmed"]:
+                door_links.append(t)       # a trusted portal-like jump: a marker, never geography
             continue
         (wa, ha), (wb, hb) = size[a], size[b]
         ea = edge_of(t["from_x"], t["from_y"], wa, ha, EXIT_EDGE)
@@ -88,10 +99,15 @@ def build(store, maps=None):
         while q:
             a = q.popleft()
             for b, (dx, dy) in geo.get(a, []):
+                want = (w.origin[a][0] + dx, w.origin[a][1] + dy)
                 if b not in w.origin:
-                    w.origin[b] = (w.origin[a][0] + dx, w.origin[a][1] + dy)
+                    w.origin[b] = want
                     w.cluster[b] = cid
                     q.append(b)
+                else:
+                    off = math.hypot(w.origin[b][0] - want[0], w.origin[b][1] - want[1])
+                    if off > CONFLICT and a < b:      # each pair once
+                        w.conflicts.append((a, b, round(off, 1)))
         cid += 1
     # interiors: attach each unplaced area to the first placed area that leads into it
     for t in door_links:

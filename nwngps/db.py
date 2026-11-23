@@ -8,6 +8,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from . import edges as E
 from .config import DATA_DIR  # Documents\\NWN GPS\\data (see config.py)
 
 SCHEMA = """
@@ -58,8 +59,8 @@ CREATE TABLE IF NOT EXISTS area_tiles (
 MIGRATIONS = {
     "areas": {"server": "TEXT"},
     "transitions": {"from_server": "TEXT", "to_server": "TEXT",
-                    "kind": "TEXT DEFAULT 'walk'",       # walk | portal (server change)
-                    "confirmed": "INTEGER DEFAULT 1"},   # 0 = portal seen once across a menu visit
+                    "kind": "TEXT DEFAULT 'walk'",       # walk | portal | jump | death | respawn (edges.py)
+                    "confirmed": "INTEGER DEFAULT 1"},   # 0 = not routed yet (see edges.py)
 }
 
 
@@ -160,7 +161,7 @@ def clean_transition(r):
     if None in (out["from_area"], out["to_area"], out["from_x"], out["from_y"], out["to_x"], out["to_y"]):
         return None
     out["from_server"], out["to_server"] = _text(r.get("from_server"), 64), _text(r.get("to_server"), 64)
-    out["kind"] = r.get("kind") if r.get("kind") in ("walk", "portal") else "walk"
+    out["kind"] = r.get("kind") if r.get("kind") in E.KINDS else "walk"
     out["confirmed"] = r.get("confirmed", 1) in (1, True)
     return out
 
@@ -318,12 +319,22 @@ class Store:
 
     def add_transition(self, from_area, fpos, to_area, tpos, from_server=None, to_server=None,
                        kind="walk", confirmed=True):
-        """Record (or re-confirm) an edge. Seeing an unconfirmed portal a second time confirms it."""
+        """Record (or re-confirm) an edge. Seeing it again confirms it, except: a jump needs
+        edges.JUMP_CONFIRM sightings, and a death edge is never confirmed. A jump seen again as a
+        normal walk/portal (a door turned up there) becomes that kind."""
         now = time.time()
         for r in self.db.execute("SELECT * FROM transitions WHERE from_area=? AND to_area=?", (from_area, to_area)):
             if dist(r["from_x"], r["from_y"], fpos[0], fpos[1]) < TRANS_MERGE_DIST:
-                self.db.execute("UPDATE transitions SET count=count+1, last_seen=?, confirmed=1 WHERE id=?",
-                                (now, r["id"]))
+                old = r["kind"] or "walk"
+                new_kind = kind if (old == "jump" and kind in E.REVERSIBLE) else old
+                if new_kind in E.NEVER_ROUTED:
+                    ok = 0
+                elif new_kind == "jump":
+                    ok = int(bool(r["confirmed"]) or (r["count"] or 1) + 1 >= E.JUMP_CONFIRM or bool(confirmed))
+                else:
+                    ok = 1
+                self.db.execute("UPDATE transitions SET count=count+1, last_seen=?, confirmed=?, kind=? WHERE id=?",
+                                (now, ok, new_kind, r["id"]))
                 self.db.commit()
                 return r["id"], False
         via = self.nearest_poi(from_area, fpos[0], fpos[1])
@@ -335,6 +346,53 @@ class Store:
              from_server, to_server, kind, int(confirmed)))
         self.db.commit()
         return cur.lastrowid, True
+
+    def promote_jumps(self, area):
+        """Unconfirmed jumps out of `area` that turn out to start at a door / pin we know now
+        (the area's doors may only be recorded after you've left it once) become walk/portal."""
+        out = []
+        for r in self.db.execute("SELECT * FROM transitions WHERE from_area=? AND kind='jump' AND confirmed=0",
+                                 (area,)).fetchall():
+            via = self.nearest_poi(area, r["from_x"], r["from_y"], max_dist=E.DOOR_NEAR)
+            if via:
+                kind = "walk" if r["from_server"] == r["to_server"] else "portal"
+                self.db.execute("UPDATE transitions SET kind=?, confirmed=1, via_poi=? WHERE id=?",
+                                (kind, via["id"], r["id"]))
+                out.append(r["id"])
+        if out:
+            self.db.commit()
+        return out
+
+    def links(self, area=None):
+        """Transitions with area names, for reviewing / fixing what was recorded."""
+        q = ("SELECT t.*, fa.name AS from_name, ta.name AS to_name FROM transitions t "
+             "LEFT JOIN areas fa ON fa.resref=t.from_area LEFT JOIN areas ta ON ta.resref=t.to_area")
+        if area:
+            return self.db.execute(q + " WHERE t.from_area=? OR t.to_area=? ORDER BY t.id", (area, area)).fetchall()
+        return self.db.execute(q + " ORDER BY t.id").fetchall()
+
+    def set_link(self, tid, confirmed=None, kind=None):
+        """Trust (or distrust) a recorded link by hand. Returns False if there is no such link."""
+        r = self.db.execute("SELECT id FROM transitions WHERE id=?", (tid,)).fetchone()
+        if not r:
+            return False
+        if kind is not None:
+            if kind not in E.KINDS:
+                raise ValueError(f"kind must be one of {E.KINDS}")
+            self.db.execute("UPDATE transitions SET kind=? WHERE id=?", (kind, tid))
+        if confirmed is not None:
+            self.db.execute("UPDATE transitions SET confirmed=? WHERE id=?", (int(bool(confirmed)), tid))
+        self.db.commit()
+        return True
+
+    def forget_link(self, tid):
+        """Delete one recorded link (after a backup). Returns the backup path, or None if no such link."""
+        if not self.db.execute("SELECT id FROM transitions WHERE id=?", (tid,)).fetchone():
+            return None
+        bak = self.backup("before-forget")
+        self.db.execute("DELETE FROM transitions WHERE id=?", (tid,))
+        self.db.commit()
+        return bak
 
     def commit(self):
         self.db.commit()

@@ -60,6 +60,12 @@ DEFAULTS = {
     "user_dir": "",          # empty = Documents\Neverwinter Nights
     "hotkeys": DEFAULT_HOTKEYS,
     "accepted_notice": False,
+    # Areas you're sent to when you die (name or resref contains any of these, any case).
+    # Links into them are never used for directions. Arelith: the Fugue Plane.
+    "death_areas": ["fugue"],
+    # Experimental, untested: for the DM client (or anyone being moved around by scripts).
+    # Records areas, map pins, doors and tile maps but no links between areas.
+    "dm_mode": False,
 }
 
 

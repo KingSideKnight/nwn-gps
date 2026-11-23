@@ -6,17 +6,18 @@ Survives the game not running yet, menus, loading screens, relogs, game restarts
 and moving between servers. One database per world (all servers that share an
 NWSync host, e.g. every Arelith server, share one map).
 
-Edges:
-  walk    area change on the same server with only loading screens in between
-  portal  arrived on a different server of the same world within PORTAL_WINDOW;
-          confirmed straight away if no menu was seen in between, otherwise
-          recorded unconfirmed (could be a manual relog) until seen again.
+Edges (an area change with only loading screens in between; see edges.py for the kinds):
+  walk / portal   left by a door, map pin or the map edge (portal = onto another server
+                  within PORTAL_WINDOW; unconfirmed if a menu was seen in between)
+  jump            left from anywhere else (spell, recall stone, script, DM, graveyard respawn)
+  death / respawn into / out of a death area (settings "death_areas")
 Anything else (long gaps, menus on the same server, game restarts) is a relog: no edge.
+Settings "dm_mode": record areas, pins, doors and maps but no edges (experimental).
 Read-only towards the game. Ctrl+C to stop.
 """
 import time
 
-from . import maps, objects
+from . import config, edges, maps, objects
 from .db import Store
 from .session import IN_GAME, MENU, NO_GAME, Session
 
@@ -42,6 +43,8 @@ class Recorder:
         self.menu_since = None
         self.entered_at = 0.0
         self.pois_at = 0.0
+        self.settings = config.load_settings()
+        self.dm_logged = False
 
     def store(self, world):
         if world not in self.stores:
@@ -50,7 +53,26 @@ class Recorder:
             log(f"world {world}: {s.path.name} {s.stats()}")
         return self.stores[world]
 
+    def edge(self, st, prev, snap, menu_seen=False):
+        """Classify and record one area change."""
+        via = st.nearest_poi(prev.area, prev.pos[0], prev.pos[1], max_dist=edges.DOOR_NEAR)
+        d = edges.dist(via["x"], via["y"], prev.pos[0], prev.pos[1]) if via else None
+        kind, confirmed = edges.classify(prev.area, prev.area_name, prev.pos, prev.size, prev.server,
+                                         snap.area, snap.area_name, snap.server, d,
+                                         self.settings.get("death_areas"))
+        if menu_seen and kind == "portal":
+            confirmed = False
+        _, new = st.add_transition(prev.area, prev.pos, snap.area, snap.pos, prev.server, snap.server,
+                                   kind=kind, confirmed=confirmed)
+        label = {"walk": "transition", "portal": "PORTAL", "jump": "JUMP (not used for directions yet)",
+                 "death": "DEATH (never used for directions)", "respawn": "respawn"}[kind]
+        if kind == "portal" and not confirmed:
+            label += " (unconfirmed: menu seen)"
+        log(f"{'NEW ' if new else ''}{label}: {prev.server}/{prev.area_name} {prev.pos[:2]} -> "
+            f"{snap.server}/{snap.area_name} {snap.pos[:2]}")
+
     def on_arrival(self, snap):
+        self.settings = config.load_settings()     # cheap; lets dm_mode / death_areas change live
         st = self.store(snap.world)
         st.upsert_area(snap.area, snap.area_name, snap.tileset, *(snap.size or (None, None)),
                        visit=True, server=snap.server)
@@ -64,13 +86,15 @@ class Recorder:
             why = "game restarted" if self.restarted else f"different world ({prev.world})"
             log(f"relog ({why}): in {snap.area_name} on {snap.server}; no edge recorded")
             return
+        if self.settings.get("dm_mode"):
+            if not self.dm_logged:
+                log("DM mode is on (settings.json): recording areas, pins, doors and maps, but no links")
+                self.dm_logged = True
+            return
+        self.dm_logged = False
         if prev.server != snap.server:
             if gap <= PORTAL_WINDOW:
-                confirmed = not self.saw_menu
-                _, new = st.add_transition(prev.area, prev.pos, snap.area, snap.pos, prev.server, snap.server,
-                                           kind="portal", confirmed=confirmed)
-                log(f"{'NEW ' if new else ''}PORTAL{'' if confirmed else ' (unconfirmed: menu seen)'}: "
-                    f"{prev.server}/{prev.area_name} {prev.pos[:2]} -> {snap.server}/{snap.area_name} {snap.pos[:2]}")
+                self.edge(st, prev, snap, menu_seen=self.saw_menu)
             else:
                 log(f"relog on {snap.server} after {gap:.0f}s; no edge recorded")
             return
@@ -79,8 +103,7 @@ class Recorder:
                 f"in {snap.area_name}; no edge recorded")
             return
         if prev.area != snap.area:
-            _, new = st.add_transition(prev.area, prev.pos, snap.area, snap.pos, prev.server, snap.server)
-            log(f"{'NEW ' if new else ''}transition: {prev.area_name} {prev.pos[:2]} -> {snap.area_name} {snap.pos[:2]}")
+            self.edge(st, prev, snap)
 
     def record_pois(self, snap):
         st = self.store(snap.world)
@@ -98,6 +121,8 @@ class Recorder:
         new = st.stats()["pois"] - before
         if new:
             log(f"  {new} new POIs ({len(pois)} visible) in {snap.area_name}")
+            for tid in st.promote_jumps(snap.area):
+                log(f"  link {tid} starts at a door / pin after all: now a normal transition")
 
     def step(self):
         snap = self.session.poll()

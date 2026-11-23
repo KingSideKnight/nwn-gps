@@ -80,7 +80,14 @@ class Navigator:
             dest_area = self.store.area_name(t["to_area"])
             hop = " (server transfer)" if t.get("kind") == "portal" else ""
             g.line1 = f"Take {self.label(t)} to {dest_area}{hop}"
-            g.line2 = "Way back assumed (not walked yet)" if t.get("assumed") else ""
+            if t.get("assumed"):
+                g.line2 = "Way back assumed (not walked yet)"
+            elif t.get("kind") == "jump":
+                g.line2 = "Teleport spot: use the portal / object here"
+            elif t.get("kind") == "respawn":
+                g.line2 = "The way out after dying"
+            else:
+                g.line2 = ""
             g.step, g.steps = 1, len(self.plan) + (1 if self.goal_xy else 0)
             g.route_exits = [g.target]
         elif self.goal_xy:

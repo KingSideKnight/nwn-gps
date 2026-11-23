@@ -75,3 +75,8 @@ Field offsets live in `nwngps/layout.py`; `python -m nwngps.snapshot` prints cur
 - [ ] Area width/height confirmation + tile list (pointer near +0x298)
 - [ ] Doors/triggers: transition flag + destination (likely server-only; learn by observing area changes)
 - [ ] Stable path from g_pAppManager to current area / player (so no full-memory scan each time)
+- [ ] DM client: is there a "this is a DM" flag (CNWCPlayer / client internal)? Then `dm_mode` can be
+      automatic. Also: does the player id at internal+0x48 follow a possessed creature?
+- [ ] Creature current / max HP on CNWCCreature: lets the recorder spot deaths on servers without a
+      death area (graveyard respawns) instead of relying on the teleport rule.
+- [ ] Arelith's Fugue: confirm the area name contains "Fugue" (the `death_areas` default).

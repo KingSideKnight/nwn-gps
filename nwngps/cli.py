@@ -8,6 +8,9 @@
   python -m nwngps.cli worldmap [out.png]                 export the stitched world map
   python -m nwngps.cli export [file.sqlite]               copy of your map database to share
   python -m nwngps.cli merge <their.sqlite> [--dry-run]   merge a friend's database (backs yours up first)
+  python -m nwngps.cli links [area text]                  recorded links between areas (id, kind, trusted?)
+  python -m nwngps.cli trust-link <id> | distrust-link <id>   use / stop using a link for directions
+  python -m nwngps.cli forget-link <id>                   delete a wrong link (backs your map up first)
   python -m nwngps.cli import-jsonl <transitions.jsonl>
 
 Without --from, `route` starts from where your character is right now (game must be running).
@@ -91,6 +94,45 @@ def cmd_route(store, args):
         print(f" {len(steps) + 1}. Then go {direction(dx, dy)} ~{math.hypot(dx, dy):.0f} m to {dest['name']}.")
 
 
+KIND_NOTE = {"walk": "", "portal": "server portal", "jump": "teleport/script",
+             "death": "death - never used", "respawn": "respawn"}
+
+
+def cmd_links(store, args):
+    area = None
+    if args:
+        text = " ".join(args).lower()
+        found = [a["resref"] for a in store.db.execute("SELECT resref, name FROM areas")
+                 if text in (a["name"] or "").lower() or text in a["resref"].lower()]
+        if not found:
+            sys.exit(f"no area matches {text!r}")
+        area = found[0]
+    rows = store.links(area)
+    for r in rows:
+        trusted = "yes" if r["confirmed"] and r["kind"] != "death" else "no "
+        note = KIND_NOTE.get(r["kind"] or "walk", r["kind"])
+        print(f"{r['id']:5}  used for directions: {trusted}  x{r['count'] or 1:<3} "
+              f"{r['from_name'] or r['from_area']} ({r['from_x']:.0f}, {r['from_y']:.0f}) -> "
+              f"{r['to_name'] or r['to_area']}{'  [' + note + ']' if note else ''}")
+    print(f"{len(rows)} links. Fix a wrong one with trust-link / distrust-link / forget-link <id>.")
+
+
+def cmd_fix_link(store, cmd, args):
+    if not args or not args[0].isdigit():
+        sys.exit(f"usage: cli {cmd} <id>   (ids are listed by `links`)")
+    tid = int(args[0])
+    if cmd == "forget-link":
+        bak = store.forget_link(tid)
+        print(f"link {tid} deleted (backup: {bak})" if bak else f"no link {tid}")
+        return
+    row = store.db.execute("SELECT kind FROM transitions WHERE id=?", (tid,)).fetchone()
+    if row and row["kind"] == "death" and cmd == "trust-link":
+        sys.exit("death links are never used for directions; use forget-link if it's wrong")
+    ok = store.set_link(tid, confirmed=(cmd == "trust-link"))
+    print(f"link {tid} {'will' if cmd == 'trust-link' else 'will not'} be used for directions" if ok
+          else f"no link {tid}")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -116,6 +158,10 @@ def main():
                 print(f"[{h['kind']:4}] {h['name']}  - {store.area_name(h['area'])}{where}")
         elif cmd == "route":
             cmd_route(store, args)
+        elif cmd == "links":
+            cmd_links(store, args)
+        elif cmd in ("trust-link", "distrust-link", "forget-link"):
+            cmd_fix_link(store, cmd, args)
         elif cmd == "worldmap":
             from . import maps as maps_mod, worldmap
             from .resources import Resources
@@ -129,6 +175,9 @@ def main():
                 img.save(path)
                 members = [store.area_name(a) for a, c in w.cluster.items() if c == cid]
                 print(f"cluster {cid}: {len(members)} areas -> {path} ({img.width}x{img.height})")
+            for a, b, off in w.conflicts:
+                print(f"  disagreement: links between {store.area_name(a)} and {store.area_name(b)} "
+                      f"place them {off} m apart from the rest of the map (see `links`)")
             print(f"interiors attached: {len(w.interiors)}; unplaced areas: "
                   f"{len(set(r['resref'] for r in store.db.execute('SELECT resref FROM areas')) - set(w.origin) - {i[3] for i in w.interiors})}")
         elif cmd == "export":

@@ -9,7 +9,9 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
   pins, doors, tiles). Offsets live in `nwngps/layout.py`; `session.check_layout` verifies every
   class vtable via RTTI at attach and refuses unknown game builds.
 - **Recording:** `nwngps/recorder.py` -> SQLite per world (`db.py`), including portals between
-  linked servers.
+  linked servers. `nwngps/edges.py` classifies each area change (walk / portal / jump / death /
+  respawn) so teleports, deaths and DM moves don't become directions. DM client support
+  (`"dm_mode"`) is experimental and untested.
 - **Drawing in-game:** `native/nwngps_gl.c` is loaded into the game at runtime; it swaps
   `GDI32!SwapBuffers` in nwmain's import table, draws a texture Python publishes through shared
   memory, reads hotkeys via a window subclass, and unhooks/unloads on request. No game files change.

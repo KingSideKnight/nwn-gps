@@ -7,19 +7,33 @@ it (cost = LOAD_COST, arriving at the recorded entry point of the next area).
 import heapq
 import math
 
+from .edges import NEVER_ROUTED, REVERSIBLE
+
 LOAD_COST = 15.0      # metres-equivalent penalty per loading screen
 REVERSE_COST = 30.0   # extra penalty for an assumed (never walked) reverse edge
 REVERSE_NEAR = 8.0    # a recorded edge this close to the arrival point already covers the way back
 
 
+def kind_of(t):
+    return t.get("kind") or "walk"
+
+
+def routable(transitions):
+    """Plain-dict copies of the edges directions may use (never death links)."""
+    return [e for e in (dict(t) for t in transitions) if kind_of(e) not in NEVER_ROUTED]
+
+
 def with_reverse_edges(transitions):
     """Recorded edges plus an assumed reverse for each one nobody has walked back yet.
-    NWN transitions are almost always two-way and you arrive next to the way back."""
-    edges = [dict(t) for t in transitions]
+    NWN transitions are almost always two-way and you arrive next to the way back. Not so for
+    jumps (spells, scripts), deaths or respawns: those get no assumed way back."""
+    edges = routable(transitions)
     by_pair = {}                         # (from, to) -> edges: keeps this linear in the edge count
     for e in edges:
         by_pair.setdefault((e["from_area"], e["to_area"]), []).append(e)
     for t in list(edges):
+        if kind_of(t) not in REVERSIBLE:
+            continue
         covered = any(math.hypot(e["from_x"] - t["to_x"], e["from_y"] - t["to_y"]) < REVERSE_NEAR
                       for e in by_pair.get((t["to_area"], t["from_area"]), ()))
         if not covered:
@@ -34,7 +48,8 @@ def with_reverse_edges(transitions):
 
 def edge_index(transitions, assume_reverse=True):
     """Prepared graph for plan(): {from_area: [edge, ...]}. Build once, reuse until the data changes."""
-    edges = with_reverse_edges(transitions) if assume_reverse else [dict(t) for t in transitions]
+    edges = (with_reverse_edges(transitions) if assume_reverse else
+             routable(transitions))
     by_area = {}
     for t in edges:
         by_area.setdefault(t["from_area"], []).append(t)

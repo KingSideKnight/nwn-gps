@@ -38,3 +38,19 @@ class Routing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KindRules(unittest.TestCase):
+    def test_no_assumed_way_back_for_jumps_or_respawns(self):
+        for kind in ("jump", "respawn"):
+            es = [edge("a", 5, 5, "b", 5, 5, kind)]
+            self.assertIsNotNone(R.plan(es, "a", (5, 5), "b"))
+            self.assertIsNone(R.plan(es, "b", (5, 5), "a"), kind)
+
+    def test_death_links_are_never_used(self):
+        es = [edge("a", 5, 5, "fugue", 5, 5, "death")]
+        self.assertIsNone(R.plan(es, "a", (5, 5), "fugue"))
+        self.assertIsNone(R.plan(es, "fugue", (5, 5), "a"))
+
+    def test_walk_still_gets_a_way_back(self):
+        self.assertIsNotNone(R.plan([edge("a", 5, 5, "b", 5, 5)], "b", (5, 5), "a"))
