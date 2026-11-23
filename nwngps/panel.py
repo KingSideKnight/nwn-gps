@@ -163,6 +163,26 @@ def toast_banner(img, d, text, kind, y, width):
         d.text((20 * SS, (y + 7 + i * 14) * SS), ln, font=f, fill=FG)
 
 
+def _fit(d, s, f, width):
+    """s shortened with an ellipsis to fit `width` panel pixels."""
+    if d.textlength(s, font=f) <= width * SS:
+        return s
+    while s and d.textlength(s + "…", font=f) > width * SS:
+        s = s[:-1]
+    return s.rstrip() + "…" if s else ""
+
+
+def _title(d, area_name):
+    """'NWN GPS' and, dimmed after it, the area you're in."""
+    title = "NWN GPS"
+    _text(d, 14, 12, title, 11, FG, bold=True)
+    if area_name:
+        x = 14 + d.textlength(title, font=font(11, True)) / SS + 8
+        f = font(9)
+        name = _fit(d, area_name, f, W - 14 - x)
+        _text(d, x, 14, name, 9, DIM)
+
+
 def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
     img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -175,7 +195,10 @@ def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
         toast_banner(img, d, f"{inbox} shared map{'s' if inbox > 1 else ''} in your Inbox - "
                              f"{KEYTEXT['import']} to import", "info", MAP_Y + 14, W)
     _text(d, W / 2, DRAG_HINT_Y, "Ctrl+Shift + drag the panel to move it", 7, DIM, anchor="mm")
-    _text(d, 14, 12, (g.dest_name if g else "GPS")[:34], 11, FG, bold=True)
+    if g:
+        _text(d, 14, 12, g.dest_name[:34], 11, FG, bold=True)
+    else:
+        _title(d, snap.area_name or snap.area if snap and snap.state == "IN_GAME" else None)
     if snap is None or snap.state != "IN_GAME":
         msg = {"NO_GAME": "Waiting for the game...", "MENU": "In menus", "LOADING": "Loading..."}.get(
             snap.state if snap else "", "Starting...")
