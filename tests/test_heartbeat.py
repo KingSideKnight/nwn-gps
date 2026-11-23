@@ -37,5 +37,25 @@ class Heartbeat(unittest.TestCase):
         self.assertEqual(g.shm.times, [])
 
 
+
+class PoisRefresh(unittest.TestCase):
+    def test_pins_saved_after_arrival_show_up(self):
+        import tempfile
+        from unittest import mock
+        from nwngps import db as dbmod
+        with mock.patch.object(dbmod, "DATA_DIR", Path(tempfile.mkdtemp())):
+            st = dbmod.Store("w")
+            g = ingame.InGame.__new__(ingame.InGame)
+            g.store = st
+            g.load_pois("farm")                       # we arrive first: nothing saved yet
+            self.assertEqual(g.pois, [])
+            st.upsert_poi("farm", "pin", "Mill", None, 10, 10, 0)    # recorder, a second later
+            st.upsert_poi("farm", "door", "Door", None, 20, 20, 0)
+            st.commit()
+            g.load_pois("farm")
+            self.assertEqual(sorted(p["name"] for p in g.pois), ["Door", "Mill"])
+            st.close()
+
+
 if __name__ == "__main__":
     unittest.main()

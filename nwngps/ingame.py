@@ -44,6 +44,7 @@ from . import share
 TOAST_SECONDS = 8.0
 INBOX_CHECK_EVERY = 10.0
 
+POIS_CHECK_EVERY = 1.0   # seconds between checks for pins / doors the recorder just saved
 AUTO_CLEAR_AFTER = 3.5    # seconds standing at the destination before it clears itself
 KEY_NAMES = {0x0D: "Enter", 0x1B: "Esc", 0x26: "Up", 0x28: "Down", 0x08: "Backspace", 0x2E: "Delete",
              0x09: "Tab", 0x21: "PgUp", 0x22: "PgDn", 0x24: "Home", 0x23: "End"}
@@ -258,6 +259,7 @@ class InGame:
         dll_source()                        # fail early and clearly if the DLL is missing
         self.next_inject, self.inject_fails = 0.0, 0
         self.nav, self.target, self.pois, self.pois_area = None, object(), [], None
+        self.pois_checked = 0.0
         self.injected_pid, self.last_status, self.last_key, self.last_publish = None, None, None, 0.0
         self.visible = True
         self.arrived_at = None
@@ -276,6 +278,14 @@ class InGame:
             if not self.stopping:
                 self.shm.publish(img)
                 self.last_publish = time.time()
+
+    def load_pois(self, area):
+        """The area's pins and doors, re-read only when the recorder (another process) changed them."""
+        self.pois_checked = time.time()
+        version = (area, *self.store.db.execute("SELECT COUNT(*), MAX(id) FROM pois WHERE area=?", (area,)).fetchone())
+        if version != getattr(self, "pois_version", None):
+            self.pois = self.store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (area,)).fetchall()
+            self.pois_version = version
 
     def heartbeat(self):
         """Re-send the last frame while the main loop is busy. The DLL hides the panel after 3 s
@@ -456,6 +466,7 @@ class InGame:
         self.nwsync_host = urlparse(snap.nwsync).hostname if snap.nwsync else None
         self.maps, self.map_img, self.fullmap_r = None, None, None
         self.pois_area, self.target = None, object()          # re-resolve the destination in this world
+        self.pois_version = None
 
     def frame(self):
         snap = self.session.poll()
@@ -472,9 +483,11 @@ class InGame:
         self.handle_events()
         self.update_target()
         if snap.state == IN_GAME and snap.area != self.pois_area:
-            self.pois = self.store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (snap.area,)).fetchall()
+            self.load_pois(snap.area)
             self.pois_area = snap.area
             self.map_img = self.area_map(snap)
+        elif snap.state == IN_GAME and time.time() - self.pois_checked > POIS_CHECK_EVERY:
+            self.load_pois(snap.area)         # the recorder saves an area's pins / doors after we arrive
         g = self.nav.update(snap) if self.nav else None
         self.auto_clear(g)
         if time.time() - self.inbox_checked > INBOX_CHECK_EVERY:
