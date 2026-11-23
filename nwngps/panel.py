@@ -308,14 +308,19 @@ def _map(img, d, s, g, pois, area_size, map_img=None):
         px, py = P(p["x"], p["y"])
         if p["kind"] == "door" and has_art:
             continue        # the tile art already shows doors; a second marker beside it looks misaligned
-        if p["kind"] == "pin":
+        if p["kind"] == "pin" and not (0 <= px <= side and 0 <= py <= side):
+            _edge_pointer(ld, px, py, side)     # outside the follow window: point to it from the border
+        elif p["kind"] == "pin":
             ld.ellipse(((px - 4) * SS, (py - 4) * SS, (px + 4) * SS, (py + 4) * SS), fill=PIN,
                        outline=(0, 0, 0, 200), width=SS)
             label = (p["name"] or "")[:22]
+            # labels go left of the dot when they'd run off the right edge of the map
+            width = ld.textlength(label, font=font(7)) / SS
+            lx, anchor = (px - 6, "rm") if px + 6 + width > side - 2 else (px + 6, "lm")
             # dark halo so labels stay readable over the tile art
             for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                _text(ld, px + 6 + dx * 0.6, py + dy * 0.6, label, 7, (0, 0, 0, 220), anchor="lm")
-            _text(ld, px + 6, py, label, 7, PIN, anchor="lm")
+                _text(ld, lx + dx * 0.6, py + dy * 0.6, label, 7, (0, 0, 0, 220), anchor=anchor)
+            _text(ld, lx, py, label, 7, PIN, anchor=anchor)
         else:
             ld.rectangle(((px - 2) * SS, (py - 2) * SS, (px + 2) * SS, (py + 2) * SS), fill=DOOR)
     _route_and_player(ld, s, g, pois, P)
@@ -324,6 +329,21 @@ def _map(img, d, s, g, pois, area_size, map_img=None):
     d.rectangle((ox * SS, oy * SS, (ox + side) * SS, (oy + side) * SS), outline=MAP_EDGE, width=SS)
     if v < max(w_m, h_m):
         _text(d, ox + side - 4, oy + side - 4, f"{v:.0f} m view", 7, DIM, anchor="rs")
+
+
+EDGE_INSET = 7        # panel pixels: off-window pin pointers sit this far inside the map border
+
+
+def _edge_pointer(d, px, py, side):
+    """A small gold arrow on the map's border, pointing at a pin outside the visible window."""
+    c = side / 2
+    dx, dy = px - c, py - c
+    t = (c - EDGE_INSET) / max(abs(dx), abs(dy))            # scale onto the inset square
+    ex, ey = c + dx * t, c + dy * t
+    ang = math.atan2(dy, dx)
+    tip = (ex + 5 * math.cos(ang), ey + 5 * math.sin(ang))
+    back = [(ex + 4 * math.cos(ang + a), ey + 4 * math.sin(ang + a)) for a in (2.4, -2.4)]
+    d.polygon([(x * SS, y * SS) for x, y in (tip, *back)], fill=PIN, outline=(0, 0, 0, 220))
 
 
 def _route_and_player(d, s, g, pois, P):
