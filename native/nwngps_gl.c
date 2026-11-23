@@ -47,6 +47,7 @@
 #define EV_EXPORT 8u   /* Ctrl+Shift+E: export the map database for sharing */
 #define EV_IMPORT 9u   /* Ctrl+Shift+I: merge maps waiting in the inbox folder */
 #define EV_LABELS 10u  /* Ctrl+Shift+L: pin names on the full map on / off */
+#define EV_MAPKEY 11u  /* code = virtual key pressed while the full map is open (Esc, arrows, Home, +/-) */
 
 /* anchors: which screen corner the offsets are measured from */
 #define ANCHOR_TR 0u
@@ -79,6 +80,9 @@ typedef struct {
     ShmEvent events[GPS_EV_RING];     /* at offset 192 */
     uint8_t pad[64];                  /* -> offset 1280 */
     uint32_t hotkeys[HK_COUNT][2];    /* v4: {virtual key, mods: 1 shift, 2 ctrl, 4 alt}; vk 0 = default */
+    /* full map open: running totals of mouse drag (pixels) and wheel (WHEEL_DELTA units); Python
+       keeps the last values it saw, so nothing is lost however fast the mouse moves */
+    volatile int32_t map_drag_x, map_drag_y, map_wheel;   /* at offset 1336 */
 } ShmHeader;
 
 /* ---- GL constants / function pointers beyond GL 1.1 ---- */
@@ -425,6 +429,17 @@ static HWND g_wnd;
 static WNDPROC g_orig_wndproc;
 static volatile LONG g_capturing = 0;
 static int g_swallow_char = 0;   /* eat the WM_CHAR that follows a swallowed Enter/Esc/hotkey */
+static WPARAM g_swallow_up = 0;  /* eat the key-up of a key the full map took */
+static int g_mapdrag = 0, g_mapdrag_x = 0, g_mapdrag_y = 0;   /* dragging the full map */
+
+static int map_open(void) {
+    return g_shm && (g_shm->flags & FLAG_FULLSCREEN) && !g_capturing;
+}
+
+static int map_key(WPARAM k) {
+    return k == VK_ESCAPE || k == VK_LEFT || k == VK_RIGHT || k == VK_UP || k == VK_DOWN || k == VK_HOME ||
+           k == VK_ADD || k == VK_SUBTRACT || k == VK_OEM_PLUS || k == VK_OEM_MINUS;
+}
 
 static void push_event(uint32_t type, uint32_t code) {
     ShmEvent *e;
@@ -469,11 +484,37 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 SetCapture(h);
                 return 0;   /* the game never sees this click */
             }
+            if (map_open()) {                  /* drag the full map around */
+                g_mapdrag = 1;
+                g_mapdrag_x = mx;
+                g_mapdrag_y = my;
+                SetCapture(h);
+                return 0;
+            }
             break;
         case WM_MOUSEMOVE:
             if (g_dragging) { set_position(mx - g_drag_dx, my - g_drag_dy); return 0; }
+            if (g_mapdrag) {
+                g_shm->map_drag_x += mx - g_mapdrag_x;
+                g_shm->map_drag_y += my - g_mapdrag_y;
+                g_mapdrag_x = mx;
+                g_mapdrag_y = my;
+                return 0;
+            }
+            break;
+        case WM_MOUSEWHEEL:
+            if (map_open()) { g_shm->map_wheel += GET_WHEEL_DELTA_WPARAM(wp); return 0; }
+            break;
+        case WM_LBUTTONDBLCLK:
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONUP:
+        case WM_RBUTTONDBLCLK:
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONUP:
+            if (map_open()) return 0;          /* clicks on the map don't walk / act in the game */
             break;
         case WM_LBUTTONUP:
+            if (g_mapdrag) { g_mapdrag = 0; ReleaseCapture(); return 0; }
             if (g_dragging) {
                 g_dragging = 0;
                 ReleaseCapture();
@@ -483,6 +524,7 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case WM_CAPTURECHANGED:
             if (g_dragging) { g_dragging = 0; push_event(EV_MOVED, 0); }
+            g_mapdrag = 0;
             break;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
@@ -499,6 +541,12 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                         return 0;
                     }
                 }
+            }
+            if (map_open() && map_key(wp)) {    /* scroll / zoom / close the full map */
+                push_event(EV_MAPKEY, (uint32_t)wp);
+                g_swallow_char = 1;
+                g_swallow_up = wp;
+                return 0;
             }
             if (g_capturing) {
                 if (wp == VK_RETURN || wp == VK_ESCAPE) {
@@ -522,6 +570,7 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case WM_KEYUP:
         case WM_SYSKEYUP:
+            if (g_swallow_up && wp == g_swallow_up) { g_swallow_up = 0; return 0; }
             if (g_capturing) return 0;
             break;
         case WM_KILLFOCUS:

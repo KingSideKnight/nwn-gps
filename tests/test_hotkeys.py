@@ -33,6 +33,9 @@ class Hotkeys(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<II", t, 6 * 8), (ord("L"), 3))  # HK_LABELS last
         src = (Path(__file__).resolve().parent.parent / "native" / "nwngps_gl.c").read_text(encoding="utf-8")
         self.assertIn(f"#define HK_COUNT {len(H.ORDER)}", src)               # DLL table the same size
+        from nwngps import ingame
+        self.assertEqual(ingame.O_MAP_INPUT, H.TABLE_OFFSET + len(H.ORDER) * 8)   # map input right after it
+        self.assertIn("map_wheel;   /* at offset 1336 */", src)
 
     def test_legend_groups_common_modifiers(self):
         rows = H.legend_rows(H.resolve({}))

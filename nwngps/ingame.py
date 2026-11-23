@@ -37,8 +37,8 @@ from .hud import read_target, resolve_target, set_target
 from .memory import k32, modules
 from .nav import Navigator
 from .fullmap import FullMap, frame_size
-from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_LABELS, EV_MOVED, EV_OPEN,
-                     EV_TOGGLE, Picker)
+from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_LABELS, EV_MAPKEY, EV_MOVED,
+                     EV_OPEN, EV_TOGGLE, Picker)
 from . import share
 
 TOAST_SECONDS = 8.0
@@ -67,6 +67,10 @@ FLAG_VISIBLE, FLAG_UNLOAD, FLAG_FULLSCREEN = 1, 2, 4
 O_SEQ, O_W, O_H, O_OFFX, O_OFFY, O_ANCHOR, O_FLAGS = 8, 12, 16, 20, 24, 28, 32
 O_STATE, O_FRAMES, O_VIEW_W, O_VIEW_H = 36, 40, 44, 48
 O_DLLVER, O_CAPTURING, O_EVHEAD, O_MSG, O_EVENTS = 52, 56, 60, 64, 192
+O_MAP_INPUT = 1336       # int32 running totals: mouse drag x, y (pixels), wheel (120 per notch)
+VK_ESCAPE, VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN, VK_HOME = 0x1B, 0x25, 0x26, 0x27, 0x28, 0x24
+ZOOM_IN_KEYS, ZOOM_OUT_KEYS = (0x6B, 0xBB), (0x6D, 0xBD)        # numpad / main-row + and -
+PAN_KEYS = {VK_LEFT: (-1, 0), VK_RIGHT: (1, 0), VK_UP: (0, 1), VK_DOWN: (0, -1)}
 EV_RING = 64
 STATES = {0: "unloaded", 1: "attached", 2: "hooked", 3: "drawing", 9: "error"}
 
@@ -203,6 +207,10 @@ class Shm:
         off_x, off_y, anchor = struct.unpack_from("<iiI", self.m, O_OFFX)
         return {"anchor": anchor, "off_x": off_x, "off_y": off_y}
 
+    def map_input(self):
+        """(drag x, drag y, wheel) running totals from the DLL (old DLLs leave them 0)."""
+        return struct.unpack_from("<iii", self.m, O_MAP_INPUT)
+
     def u32(self, off):
         return struct.unpack_from("<I", self.m, off)[0]
 
@@ -279,6 +287,7 @@ class InGame:
         self.maps, self.map_img = None, None
         self.fullmap, self.fullmap_r, self.last_img = False, None, None
         self.pin_labels = load_ui().get("pin_labels", True) is not False
+        self.map_input = (0, 0, 0)            # last drag / wheel totals seen from the DLL
         self.toast = None                      # (text, kind, expires_at)
         self.inbox_n, self.inbox_checked = 0, 0.0
         self.jobs = share.Jobs(self.store.world, self.notify)
@@ -373,6 +382,19 @@ class InGame:
         self.next_inject = time.time() + wait
         return False
 
+    def map_mouse(self):
+        """Mouse drag / wheel on the open full map (running totals from the DLL)."""
+        now = self.shm.map_input()
+        dx, dy, wheel = (a - b for a, b in zip(now, self.map_input))
+        self.map_input = now
+        if dx or dy:
+            # screen pixels -> pixels of the frame we render (the DLL scales it to the window)
+            vw, vh = self.shm.u32(O_VIEW_W), self.shm.u32(O_VIEW_H)
+            fw, fh = frame_size(vw, vh)
+            self.fullmap_r.drag(dx * fw / (vw or fw), dy * fh / (vh or fh))
+        if wheel:
+            self.fullmap_r.zoom(wheel / 120)
+
     def handle_events(self):
         for t, code, _mods in self.shm.events():
             if t == EV_TOGGLE:
@@ -386,9 +408,22 @@ class InGame:
                         self.maps = maps.Maps(Resources(self.nwsync_host))
                     self.fullmap_r = self.fullmap_r or FullMap(self.store, self.maps)
                     self.fullmap_r.pin_labels = self.pin_labels
+                    self.fullmap_r.reset_view()          # opens on you; scroll / zoom from there
                     self.fullmap_r.rebuild()
+                    self.map_input = self.shm.map_input()
                 self.apply_flags()
                 log(f"hotkey: full map {'open' if self.fullmap else 'closed'}")
+            elif t == EV_MAPKEY and self.fullmap and self.fullmap_r:
+                if code == VK_ESCAPE:
+                    self.fullmap = False
+                    self.apply_flags()
+                    log("full map closed (Esc)")
+                elif code == VK_HOME:
+                    self.fullmap_r.reset_view()
+                elif code in PAN_KEYS:
+                    self.fullmap_r.pan(*PAN_KEYS[code])
+                elif code in ZOOM_IN_KEYS + ZOOM_OUT_KEYS:
+                    self.fullmap_r.zoom(1 if code in ZOOM_IN_KEYS else -1)
             elif t == EV_LABELS:
                 self.pin_labels = not self.pin_labels
                 if self.fullmap_r:
@@ -518,10 +553,12 @@ class InGame:
         full = self.fullmap and not self.picker.open and snap.state == IN_GAME
         # The recorder saves a new area / link / area map a moment after you arrive: redraw then.
         data = self.fullmap_r.refresh() if full and self.fullmap_r else None
+        if full and self.fullmap_r:
+            self.map_mouse()
         if self.picker.open:
             key = ("picker", self.picker.query, self.picker.sel, len(self.picker.results))
         else:
-            key = (full, data, self.pin_labels, toast, self.inbox_n, snap.state, snap.area, len(self.pois),
+            key = (full, data, self.pin_labels, full and self.fullmap_r and self.fullmap_r.view_key(), toast, self.inbox_n, snap.state, snap.area, len(self.pois),
                    tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                    tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
                    (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)

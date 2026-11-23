@@ -14,6 +14,9 @@ FG, DIM, ROUTE, ME, GOLD = (232, 238, 242, 255), (125, 138, 148, 255), (76, 217,
     (63, 193, 255, 255), (242, 201, 76, 255)
 HEADER, FOOTER, PAD = 56, 34, 24
 MAX_VIEW = 1200.0     # metres across: bigger clusters show a window this wide that follows you
+MIN_SPAN = 150.0      # metres across: closest zoom
+ZOOM_STEP = 1.25      # one wheel notch / one +/- press
+PAN_STEP = 0.25       # an arrow key scrolls this share of the view
 
 
 def frame_size(view_w, view_h, max_w=1600):
@@ -33,6 +36,48 @@ class FullMap:
         self.store, self.maps = store, maps
         self.world, self.cache, self.built_version = None, {}, None
         self.pin_labels = True       # pin names on / off (Ctrl+Shift+L, remembered in ui.json)
+        # scrolling / zooming: center None = follow you; span None = default zoom
+        self.center, self.span, self.view_cid = None, None, None
+        self.last_view, self.last_px_per_m = None, None
+
+    # --- scrolling and zooming (mouse drag / wheel, arrows, +/-, Home) ---------------------------
+    def reset_view(self):
+        """Back to following you at the default zoom."""
+        self.center = self.span = None
+
+    def view_key(self):
+        """Part of the in-game render key: redraw when the view moves."""
+        c = self.center and (round(self.center[0]), round(self.center[1]))
+        return c, self.span and round(self.span)
+
+    def _current(self):
+        if self.last_view is None:
+            return None
+        x0, y0, x1, y1 = self.last_view
+        return ((x0 + x1) / 2, (y0 + y1) / 2), x1 - x0
+
+    def drag(self, fx, fy):
+        """Drag the map by (fx, fy) frame pixels (right / down positive): the map follows the mouse."""
+        cur = self._current()
+        if cur is None or not self.last_px_per_m or not (fx or fy):
+            return
+        cx, cy = self.center or cur[0]
+        self.center = (cx - fx / self.last_px_per_m, cy + fy / self.last_px_per_m)
+
+    def pan(self, sx, sy):
+        """Scroll by a share of the view: sx +1 = east, sy +1 = north."""
+        cur = self._current()
+        if cur is None:
+            return
+        (cx, cy), span = self.center or cur[0], cur[1]
+        self.center = (cx + sx * PAN_STEP * span, cy + sy * PAN_STEP * span)
+
+    def zoom(self, steps):
+        """steps > 0 zooms in."""
+        cur = self._current()
+        if cur is None or not steps:
+            return
+        self.span = cur[1] / ZOOM_STEP ** steps
 
     def version(self):
         """Changes whenever the recorder (another process) adds areas, adds or distrusts links,
@@ -64,7 +109,12 @@ class FullMap:
             cid = self.world.cluster[home]
             title = "World map"
             here = self.world.to_world(home, *(snap.pos[:2] if hx is None else (hx, hy)))
+            if cid != self.view_cid:          # another map (e.g. after a boat): start on you again
+                self.reset_view()
+                self.view_cid = cid
             view = self._view(cid, here, (box[2] - box[0]) / (box[3] - box[1]))
+            self.last_view = view
+            self.last_px_per_m = min((box[2] - box[0]) / (view[2] - view[0]), (box[3] - box[1]) / (view[3] - view[1]))
             src, P = worldmap.render_view(self.world, self.store, self.maps, cid, view,
                                           box[2] - box[0], box[3] - box[1],
                                           pin_labels=self.pin_labels)
@@ -73,7 +123,10 @@ class FullMap:
             me = to_px(*P(*here))
             route = self._route_points(snap, nav, P, to_px)
             inside = None if hx is None else snap.area_name
-            if view != self.world.bounds(cid):
+            if self.center is not None:
+                _text(d, (box[2] - 8, box[3] - 8), f"{view[2] - view[0]:.0f} m view - Home: back to you", 8,
+                      DIM, anchor="rs")
+            elif view != self.world.bounds(cid):
                 _text(d, (box[2] - 8, box[3] - 8), f"{view[2] - view[0]:.0f} m view, following you", 8, DIM,
                       anchor="rs")
         else:                                              # area not linked yet: its own map
@@ -87,7 +140,8 @@ class FullMap:
             ex, ey = pts[-1]
             d.ellipse((ex - 9, ey - 9, ex + 9, ey + 9), outline=ROUTE, width=3)
         fx, fy = (snap.facing or (0, 1, 0))[:2]
-        _arrow(d, me[0] / 2, me[1] / 2, 9, math.degrees(math.atan2(fx, fy)), ME)
+        if box[0] <= me[0] <= box[2] and box[1] <= me[1] <= box[3]:     # you may be scrolled out of view
+            _arrow(d, me[0] / 2, me[1] / 2, 9, math.degrees(math.atan2(fx, fy)), ME)
         # header / footer
         _text(d, (PAD, 16), title, 13, FG, bold=True)
         where = snap.area_name or ""
@@ -96,8 +150,9 @@ class FullMap:
         _text(d, (W - PAD, 18), where[:90], 9, DIM, anchor="ra")
         if g:
             _text(d, (PAD, H - 12), f"To {g.dest_name}: {g.line1}"[:140], 9, FG, anchor="ls")
-        _text(d, (W - PAD, H - 12), f"{KEYTEXT['labels']}  pin names {'off' if self.pin_labels else 'on'}"
-                                    f"     {KEYTEXT['map']}  close map", 9, DIM, anchor="rs")
+        hint = "drag / arrows scroll    wheel / +- zoom    " if home is not None else ""
+        _text(d, (W - PAD, H - 12), f"{hint}{KEYTEXT['labels']}  pin names {'off' if self.pin_labels else 'on'}"
+                                    f"    Esc  close", 9, DIM, anchor="rs")
         if toast:
             color = TOAST_COLORS.get(toast[1], TOAST_COLORS["info"])
             tw = d.textlength(toast[0], font=font(10)) + 40
@@ -108,15 +163,25 @@ class FullMap:
         return img
 
     def _view(self, cid, here, aspect):
-        """Whole cluster if it fits in MAX_VIEW metres, else a MAX_VIEW window on you (clamped)."""
+        """Default: the whole cluster if it fits in MAX_VIEW metres, else a MAX_VIEW window on you.
+        Scrolled / zoomed: centred on self.center, self.span metres across. Always clamped so the
+        map can't be scrolled away entirely."""
         x0, y0, x1, y1 = self.world.bounds(cid)
-        if x1 - x0 <= MAX_VIEW and y1 - y0 <= MAX_VIEW / aspect:
+        fit = max(x1 - x0, (y1 - y0) * aspect)            # span that shows the whole cluster
+        if self.span is None and self.center is None and fit <= MAX_VIEW:
             return (x0, y0, x1, y1)
-        vw, vh = MAX_VIEW, MAX_VIEW / aspect
+        span = self.span if self.span is not None else min(MAX_VIEW, fit)
+        span = min(max(span, MIN_SPAN), max(fit, MIN_SPAN))
+        if self.span is not None:
+            self.span = span                              # don't let wheel steps pile up past the limits
+        vw, vh = span, span / aspect
 
-        def clamp(c, lo, hi, span):
-            return (lo + hi) / 2 if hi - lo <= span else min(max(c, lo + span / 2), hi - span / 2)
-        cx, cy = clamp(here[0], x0, x1, vw), clamp(here[1], y0, y1, vh)
+        def clamp(c, lo, hi, size):
+            return (lo + hi) / 2 if hi - lo <= size else min(max(c, lo + size / 2), hi - size / 2)
+        cx, cy = self.center or here
+        cx, cy = clamp(cx, x0, x1, vw), clamp(cy, y0, y1, vh)
+        if self.center is not None:
+            self.center = (cx, cy)                        # stop at the map's edges
         return (cx - vw / 2, cy - vh / 2, cx + vw / 2, cy + vh / 2)
 
     @staticmethod
