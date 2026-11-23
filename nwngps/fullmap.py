@@ -31,18 +31,31 @@ def _text(d, xy, s, size, color, bold=False, anchor="la"):
 class FullMap:
     def __init__(self, store, maps):
         self.store, self.maps = store, maps
-        self.world, self.cache = None, {}
+        self.world, self.cache, self.built_version = None, {}, None
+
+    def version(self):
+        """Changes whenever the recorder (another process) adds areas, links or area maps."""
+        db = self.store.db
+        return (db.execute("SELECT COUNT(*) FROM areas").fetchone()[0],
+                *db.execute("SELECT COUNT(*), MAX(last_seen) FROM transitions").fetchone(),
+                db.execute("SELECT COUNT(*) FROM area_tiles").fetchone()[0])
 
     def rebuild(self):
-        """Call when the database may have changed (area change)."""
+        self.built_version = self.version()
         self.world = worldmap.build(self.store, self.maps)
+
+    def refresh(self):
+        """Rebuild if the database changed since the last build. Returns the current version."""
+        v = self.version()
+        if v != self.built_version or self.world is None:
+            self.rebuild()
+        return v
 
     def render(self, size, snap, g, nav, area_map_img, toast=None):
         W, H = size
         img = Image.new("RGBA", (W, H), BG)
         d = ImageDraw.Draw(img)
-        if self.world is None:
-            self.rebuild()
+        self.refresh()
         home, hx, hy = worldmap.home_of(self.world, snap.area) if snap.area else (None, None, None)
         box = (PAD, HEADER, W - PAD, H - FOOTER)
         if home is not None:

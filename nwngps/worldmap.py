@@ -166,6 +166,8 @@ def _area_art(store, maps, area, wpx, hpx):
     if rec and maps:
         tileset, tw, th, tiles = rec
         art = maps.image(tileset, tw, th, tiles).resize((wpx, hpx), Image.LANCZOS)
+    if art is None:
+        return None          # tiles not recorded yet (the recorder saves them shortly after you arrive)
     _art_cache[key] = art
     while len(_art_cache) > ART_CACHE_MAX:
         _art_cache.pop(next(iter(_art_cache)))

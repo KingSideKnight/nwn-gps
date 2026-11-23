@@ -43,7 +43,7 @@ from . import share
 TOAST_SECONDS = 8.0
 INBOX_CHECK_EVERY = 10.0
 
-AUTO_CLEAR_AFTER = 10.0   # seconds standing at the destination before it clears itself
+AUTO_CLEAR_AFTER = 3.5    # seconds standing at the destination before it clears itself
 KEY_NAMES = {0x0D: "Enter", 0x1B: "Esc", 0x26: "Up", 0x28: "Down", 0x08: "Backspace", 0x2E: "Delete",
              0x09: "Tab", 0x21: "PgUp", 0x22: "PgDn", 0x24: "Home", 0x23: "End"}
 from urllib.parse import urlparse
@@ -453,18 +453,18 @@ class InGame:
             self.pois = self.store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (snap.area,)).fetchall()
             self.pois_area = snap.area
             self.map_img = self.area_map(snap)
-            if self.fullmap_r:
-                self.fullmap_r.rebuild()          # the recorder may have added areas / links
         g = self.nav.update(snap) if self.nav else None
         self.auto_clear(g)
         if time.time() - self.inbox_checked > INBOX_CHECK_EVERY:
             self.inbox_n, self.inbox_checked = len(share.inbox_files()), time.time()
         toast = self.current_toast()
         full = self.fullmap and not self.picker.open and snap.state == IN_GAME
+        # The recorder saves a new area / link / area map a moment after you arrive: redraw then.
+        data = self.fullmap_r.refresh() if full and self.fullmap_r else None
         if self.picker.open:
             key = ("picker", self.picker.query, self.picker.sel, len(self.picker.results))
         else:
-            key = (full, toast, self.inbox_n, snap.state, snap.area, len(self.pois),
+            key = (full, data, toast, self.inbox_n, snap.state, snap.area, len(self.pois),
                    tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                    tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
                    (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)

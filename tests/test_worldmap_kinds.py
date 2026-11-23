@@ -42,5 +42,23 @@ class WorldMapKinds(unittest.TestCase):
         self.assertTrue(w.conflicts)
 
 
+
+class FullMapRefresh(unittest.TestCase):
+    def test_picks_up_areas_the_recorder_adds_later(self):
+        from nwngps.fullmap import FullMap
+        with mock.patch.object(dbmod, "DATA_DIR", Path(tempfile.mkdtemp())):
+            st = dbmod.Store("w")
+            st.upsert_area("a", "a", "t", 4, 4, visit=True, server="S")
+            fm = FullMap(st, None)
+            v1 = fm.refresh()
+            self.assertNotIn("b", fm.world.origin)
+            self.assertEqual(fm.refresh(), v1)                  # nothing new: no rebuild
+            st.upsert_area("b", "b", "t", 4, 4, visit=True, server="S")   # recorder, a moment later
+            st.add_transition("a", (20, 39, 0), "b", (20, 1, 0), "S", "S")
+            self.assertNotEqual(fm.refresh(), v1)
+            self.assertIn("b", fm.world.origin)
+            st.close()
+
+
 if __name__ == "__main__":
     unittest.main()
