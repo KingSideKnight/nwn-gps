@@ -18,6 +18,12 @@ class SourceEncoding(unittest.TestCase):
                         bad.append(f"{f.relative_to(ROOT)}:{n}: {line.strip()[:80]}")
         self.assertEqual(bad, [], "\n".join(bad))
 
+    def test_lf_line_endings(self):
+        # Path.write_text on Windows writes CRLF; the repo uses LF (only .cmd files need CRLF).
+        bad = [str(f.relative_to(ROOT)) for pattern in ("nwngps/*.py", "tests/*.py", "packaging/*.py", "*.md")
+               for f in ROOT.glob(pattern) if b"\r\n" in f.read_bytes()]
+        self.assertEqual(bad, [], "CRLF line endings in: " + ", ".join(bad))
+
     def test_sources_are_valid_utf8(self):
         for f in list(ROOT.glob("nwngps/*.py")) + list(ROOT.glob("native/*.c")):
             f.read_bytes().decode("utf-8")      # raises if not
