@@ -209,25 +209,66 @@ def render_view(world, store, maps, cid, view, out_w, out_h):
                    font=_font(11), fill=(110, 122, 132, 255), anchor="mm")
         d.rectangle((left, top, right, bottom), outline=(90, 110, 125, 255), width=2)
         names.append(((left + right) / 2, max(top + 14, 14), short_name(store.area_name(a))))
-    labelled = set()
+    _markers(d, world, store, cid, P, out_w, out_h, names)
+    _names(d, names)
+    return img, P
+
+
+GOLD = (242, 201, 76, 255)
+PIN_NEAR_DOOR = 8.0      # metres: a pin this close to a building marker is that marker's label
+
+
+def _label(d, x, y, text, taken, size=11):
+    """Outlined gold label to the right of (x, y), unless it would overlap one already drawn."""
+    f = _font(size)
+    box = d.textbbox((x + 7, y), text, font=f, anchor="lm")
+    box = (box[0] - 2, box[1] - 1, box[2] + 2, box[3] + 1)
+    if any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3] for b in taken):
+        return
+    taken.append(box)
+    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        d.text((x + 7 + dx, y + dy), text, font=f, fill=(0, 0, 0, 255), anchor="lm")
+    d.text((x + 7, y), text, font=f, fill=GOLD, anchor="lm")
+
+
+def _markers(d, world, store, cid, P, out_w, out_h, names):
+    """Building markers (squares, at the door) and the areas' map pins (dots) of cluster `cid`.
+    Labels never overlap each other or the area names; dots are always drawn."""
+    from .panel import display_pois
+    taken = [d.textbbox((cx, ty), name, font=_font(14, True), anchor="mt") for cx, ty, name in names]
+    visible = lambda px, py: -20 <= px < out_w + 20 and -20 <= py < out_h + 20
+    doors, labelled = {}, set()
     for parent, x, y, inner in world.interiors:
         if world.cluster.get(parent) != cid or (parent, round(x), round(y)) in labelled:
-            continue
+            continue          # one label per door (deeper floors share their building's door)
         labelled.add((parent, round(x), round(y)))
+        doors.setdefault(parent, []).append((x, y))
         px, py = P(*world.to_world(parent, x, y))
-        if not (0 <= px < out_w and 0 <= py < out_h):
+        if not visible(px, py):
             continue
-        d.rectangle((px - 4, py - 4, px + 4, py + 4), fill=(242, 201, 76, 255), outline=(0, 0, 0, 255))
-        label, f = short_name(store.area_name(inner)), _font(11)
-        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            d.text((px + 7 + dx, py + dy), label, font=f, fill=(0, 0, 0, 255), anchor="lm")
-        d.text((px + 7, py), label, font=f, fill=(242, 201, 76, 255), anchor="lm")
+        d.rectangle((px - 4, py - 4, px + 4, py + 4), fill=GOLD, outline=(0, 0, 0, 255))
+        _label(d, px, py, short_name(store.area_name(inner)), taken)
+    for a, c in world.cluster.items():
+        if c != cid:
+            continue
+        for p in display_pois(store.area_pois(a)):
+            if p["kind"] != "pin" or not p["name"]:
+                continue
+            if any(math.hypot(p["x"] - x, p["y"] - y) <= PIN_NEAR_DOOR for x, y in doors.get(a, ())):
+                continue      # the building marker there already says where it goes
+            px, py = P(*world.to_world(a, p["x"], p["y"]))
+            if not visible(px, py):
+                continue
+            d.ellipse((px - 4, py - 4, px + 4, py + 4), fill=GOLD, outline=(0, 0, 0, 255))
+            _label(d, px, py, p["name"], taken)
+
+
+def _names(d, names):
     f = _font(14, True)
     for cx, ty, name in names:
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)):
             d.text((cx + dx, ty + dy), name, font=f, fill=(0, 0, 0, 255), anchor="mt")
         d.text((cx, ty), name, font=f, fill=(232, 238, 242, 255), anchor="mt")
-    return img, P
 
 
 def render(world, store, maps, cid, ppm=1.6, margin=40):
@@ -261,21 +302,6 @@ def render(world, store, maps, cid, ppm=1.6, margin=40):
                    font=_font(11), fill=(110, 122, 132, 255), anchor="mm")
         d.rectangle((left, top, right, bottom), outline=(90, 110, 125, 255), width=2)
         names.append(((left + right) / 2, top + 14, short_name(store.area_name(a))))
-    labelled = set()
-    for parent, x, y, inner in world.interiors:
-        if world.cluster.get(parent) != cid or (parent, round(x), round(y)) in labelled:
-            continue          # one label per door (deeper floors share their building's door)
-        labelled.add((parent, round(x), round(y)))
-        px, py = P(*world.to_world(parent, x, y))
-        d.rectangle((px - 4, py - 4, px + 4, py + 4), fill=(242, 201, 76, 255), outline=(0, 0, 0, 255))
-        label = short_name(store.area_name(inner))
-        f = _font(11)
-        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            d.text((px + 7 + dx, py + dy), label, font=f, fill=(0, 0, 0, 255), anchor="lm")
-        d.text((px + 7, py), label, font=f, fill=(242, 201, 76, 255), anchor="lm")
-    f = _font(14, True)
-    for cx, ty, name in names:
-        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)):
-            d.text((cx + dx, ty + dy), name, font=f, fill=(0, 0, 0, 255), anchor="mt")
-        d.text((cx, ty), name, font=f, fill=(232, 238, 242, 255), anchor="mt")
+    _markers(d, world, store, cid, P, W, H, names)
+    _names(d, names)
     return img, P

@@ -62,3 +62,15 @@ class FullMapRefresh(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PinLabels(unittest.TestCase):
+    def test_overlapping_labels_are_skipped(self):
+        from PIL import Image, ImageDraw
+        from nwngps import worldmap
+        d = ImageDraw.Draw(Image.new("RGBA", (300, 100)))
+        taken = []
+        worldmap._label(d, 10, 50, "Harbourmaster's Office", taken)
+        worldmap._label(d, 14, 52, "Tavern", taken)          # on top of the first: skipped
+        worldmap._label(d, 10, 80, "Caravan", taken)         # clear of it: drawn
+        self.assertEqual(len(taken), 2)
