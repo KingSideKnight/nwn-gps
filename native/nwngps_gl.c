@@ -46,6 +46,7 @@
 #define EV_FULLMAP 7u  /* Ctrl+Shift+M: toggle the full-screen map */
 #define EV_EXPORT 8u   /* Ctrl+Shift+E: export the map database for sharing */
 #define EV_IMPORT 9u   /* Ctrl+Shift+I: merge maps waiting in the inbox folder */
+#define EV_LABELS 10u  /* Ctrl+Shift+L: pin names on the full map on / off */
 
 /* anchors: which screen corner the offsets are measured from */
 #define ANCHOR_TR 0u
@@ -56,10 +57,10 @@
 typedef struct { uint32_t type, code, mods, pad; } ShmEvent;
 
 /* configurable hotkeys (v4), in this order; Python fills the table from settings.json */
-#define HK_COUNT 6
-enum { HK_SEARCH, HK_CLEAR, HK_MAP, HK_HIDE, HK_EXPORT, HK_IMPORT };
-static const uint32_t HK_DEFAULT[HK_COUNT][2] = {{'F', 3}, {'X', 3}, {'M', 3}, {'G', 3}, {'E', 3}, {'I', 3}};
-static const uint32_t HK_EVENT[HK_COUNT] = {EV_OPEN, EV_CLEAR, EV_FULLMAP, EV_TOGGLE, EV_EXPORT, EV_IMPORT};
+#define HK_COUNT 7
+enum { HK_SEARCH, HK_CLEAR, HK_MAP, HK_HIDE, HK_EXPORT, HK_IMPORT, HK_LABELS };
+static const uint32_t HK_DEFAULT[HK_COUNT][2] = {{'F', 3}, {'X', 3}, {'M', 3}, {'G', 3}, {'E', 3}, {'I', 3}, {'L', 3}};
+static const uint32_t HK_EVENT[HK_COUNT] = {EV_OPEN, EV_CLEAR, EV_FULLMAP, EV_TOGGLE, EV_EXPORT, EV_IMPORT, EV_LABELS};
 
 typedef struct {
     uint32_t magic, version;

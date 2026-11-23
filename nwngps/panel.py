@@ -132,7 +132,7 @@ LEGEND = [("Ctrl+Shift", [("F", "Search"), ("X", "Clear"), ("M", "Map"), ("G", "
 
 
 KEYTEXT = {"search": "Ctrl+Shift+F", "clear": "Ctrl+Shift+X", "map": "Ctrl+Shift+M", "hide": "Ctrl+Shift+G",
-           "export": "Ctrl+Shift+E", "import": "Ctrl+Shift+I"}
+           "export": "Ctrl+Shift+E", "import": "Ctrl+Shift+I", "labels": "Ctrl+Shift+L"}
 
 
 def set_legend(rows, keytext=None):

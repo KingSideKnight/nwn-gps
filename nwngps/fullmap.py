@@ -32,6 +32,7 @@ class FullMap:
     def __init__(self, store, maps):
         self.store, self.maps = store, maps
         self.world, self.cache, self.built_version = None, {}, None
+        self.pin_labels = True       # pin names on / off (Ctrl+Shift+L, remembered in ui.json)
 
     def version(self):
         """Changes whenever the recorder (another process) adds areas, adds or distrusts links,
@@ -65,7 +66,8 @@ class FullMap:
             here = self.world.to_world(home, *(snap.pos[:2] if hx is None else (hx, hy)))
             view = self._view(cid, here, (box[2] - box[0]) / (box[3] - box[1]))
             src, P = worldmap.render_view(self.world, self.store, self.maps, cid, view,
-                                          box[2] - box[0], box[3] - box[1])
+                                          box[2] - box[0], box[3] - box[1],
+                                          pin_labels=self.pin_labels)
             img.alpha_composite(src, (box[0], box[1]))
             to_px = lambda x, y: (box[0] + x, box[1] + y)       # noqa: E731
             me = to_px(*P(*here))
@@ -94,7 +96,8 @@ class FullMap:
         _text(d, (W - PAD, 18), where[:90], 9, DIM, anchor="ra")
         if g:
             _text(d, (PAD, H - 12), f"To {g.dest_name}: {g.line1}"[:140], 9, FG, anchor="ls")
-        _text(d, (W - PAD, H - 12), f"{KEYTEXT['map']}  close map", 9, DIM, anchor="rs")
+        _text(d, (W - PAD, H - 12), f"{KEYTEXT['labels']}  pin names {'off' if self.pin_labels else 'on'}"
+                                    f"     {KEYTEXT['map']}  close map", 9, DIM, anchor="rs")
         if toast:
             color = TOAST_COLORS.get(toast[1], TOAST_COLORS["info"])
             tw = d.textlength(toast[0], font=font(10)) + 40
@@ -156,5 +159,6 @@ class FullMap:
                 continue
             x, y = to_px(p["x"] * ppx, (h_m - p["y"]) * ppx)
             d.ellipse((x - 5, y - 5, x + 5, y + 5), fill=GOLD, outline=(0, 0, 0, 255))
-            _text(d, (x + 8, y), (p["name"] or "")[:30], 8, GOLD, anchor="lm")
+            if self.pin_labels:
+                _text(d, (x + 8, y), (p["name"] or "")[:30], 8, GOLD, anchor="lm")
         return to_px(snap.pos[0] * ppx, (h_m - snap.pos[1]) * ppx)

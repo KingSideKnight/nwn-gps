@@ -21,14 +21,16 @@ Leave the small NWN GPS window open while you play. Close it (or press Ctrl+C in
 | Keys | What it does |
 |---|---|
 | **Ctrl+Shift+F** | Choose a destination: type to search places, ↑/↓ to pick, Enter to go, Esc to cancel |
-| **Ctrl+Shift+X** | Clear the destination (it also clears itself 10 s after you arrive) |
+| **Ctrl+Shift+X** | Clear the destination (it also clears itself a few seconds after you arrive) |
 | **Ctrl+Shift+M** | Full-screen world map (press again to close) |
+| **Ctrl+Shift+L** | Pin names on the full-screen map on / off (the dots stay; it remembers your choice) |
 | **Ctrl+Shift+G** | Hide / show the panel |
 | **Ctrl+Shift+E** | Export your map to share with friends |
 | **Ctrl+Shift+I** | Import maps friends sent you |
 | **Ctrl+Shift + drag** | Move the panel (it remembers where you put it) |
 
-The panel always shows these keys at the bottom, so you don't need to memorise them.
+The panel always shows these keys at the bottom (the full-screen map shows its own), so you don't
+need to memorise them.
 
 ## How mapping works
 - The map grows as you explore. Every area you enter is recorded with its map pins, doors and

@@ -5,9 +5,10 @@ Keys: A-Z, 0-9, F1-F12. At least one modifier is required (so the game keeps its
 """
 from .config import DEFAULT_HOTKEYS
 
-ORDER = ["search", "clear", "map", "hide", "export", "import"]     # same order as the DLL's table
+ORDER = ["search", "clear", "map", "hide", "export", "import", "labels"]     # same order as the DLL's table
 LABELS = {"search": "Search", "clear": "Clear", "map": "Map", "hide": "Hide",
-          "export": "Export map", "import": "Import maps"}
+          "export": "Export map", "import": "Import maps",
+          "labels": "Pin names"}
 MODS = {"shift": 1, "ctrl": 2, "control": 2, "alt": 4}
 TABLE_OFFSET = 1280
 

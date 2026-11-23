@@ -27,9 +27,12 @@ class Hotkeys(unittest.TestCase):
     def test_table_layout_matches_dll_order(self):
         r = H.resolve({})
         t = H.table_bytes(r)
-        self.assertEqual(len(t), 6 * 8)
+        self.assertEqual(len(t), 7 * 8)
         self.assertEqual(struct.unpack_from("<II", t, 0), (ord("F"), 3))      # HK_SEARCH first
-        self.assertEqual(struct.unpack_from("<II", t, 5 * 8), (ord("I"), 3))  # HK_IMPORT last
+        self.assertEqual(struct.unpack_from("<II", t, 5 * 8), (ord("I"), 3))  # HK_IMPORT
+        self.assertEqual(struct.unpack_from("<II", t, 6 * 8), (ord("L"), 3))  # HK_LABELS last
+        src = (Path(__file__).resolve().parent.parent / "native" / "nwngps_gl.c").read_text(encoding="utf-8")
+        self.assertIn(f"#define HK_COUNT {len(H.ORDER)}", src)               # DLL table the same size
 
     def test_legend_groups_common_modifiers(self):
         rows = H.legend_rows(H.resolve({}))

@@ -52,7 +52,7 @@ OLD_LOCALAPPDATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppDat
 
 DEFAULT_HOTKEYS = {
     "search": "Ctrl+Shift+F", "clear": "Ctrl+Shift+X", "map": "Ctrl+Shift+M", "hide": "Ctrl+Shift+G",
-    "export": "Ctrl+Shift+E", "import": "Ctrl+Shift+I",
+    "export": "Ctrl+Shift+E", "import": "Ctrl+Shift+I", "labels": "Ctrl+Shift+L",
 }
 DEFAULTS = {
     "version": SETTINGS_VERSION,

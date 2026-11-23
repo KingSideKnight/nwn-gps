@@ -175,7 +175,7 @@ def _area_art(store, maps, area, wpx, hpx):
     return art
 
 
-def render_view(world, store, maps, cid, view, out_w, out_h):
+def render_view(world, store, maps, cid, view, out_w, out_h, pin_labels=True):
     """Draw only the part of cluster `cid` inside `view` = (x0, y0, x1, y1) world metres, at
     out_w x out_h pixels. Cost depends on what's visible, not on how big the world is.
     Returns (image, world->pixel function)."""
@@ -209,7 +209,7 @@ def render_view(world, store, maps, cid, view, out_w, out_h):
                    font=_font(11), fill=(110, 122, 132, 255), anchor="mm")
         d.rectangle((left, top, right, bottom), outline=(90, 110, 125, 255), width=2)
         names.append(((left + right) / 2, max(top + 14, 14), short_name(store.area_name(a))))
-    _markers(d, world, store, cid, P, out_w, out_h, names)
+    _markers(d, world, store, cid, P, out_w, out_h, names, pin_labels)
     _names(d, names)
     return img, P
 
@@ -231,9 +231,10 @@ def _label(d, x, y, text, taken, size=11):
     d.text((x + 7, y), text, font=f, fill=GOLD, anchor="lm")
 
 
-def _markers(d, world, store, cid, P, out_w, out_h, names):
+def _markers(d, world, store, cid, P, out_w, out_h, names, pin_labels=True):
     """Building markers (squares, at the door) and the areas' map pins (dots) of cluster `cid`.
-    Labels never overlap each other or the area names; dots are always drawn."""
+    Labels never overlap each other or the area names; dots are always drawn. pin_labels=False
+    leaves out the pins' names (building names stay)."""
     from .panel import display_pois
     taken = [d.textbbox((cx, ty), name, font=_font(14, True), anchor="mt") for cx, ty, name in names]
     visible = lambda px, py: -20 <= px < out_w + 20 and -20 <= py < out_h + 20
@@ -260,7 +261,8 @@ def _markers(d, world, store, cid, P, out_w, out_h, names):
             if not visible(px, py):
                 continue
             d.ellipse((px - 4, py - 4, px + 4, py + 4), fill=GOLD, outline=(0, 0, 0, 255))
-            _label(d, px, py, p["name"], taken)
+            if pin_labels:
+                _label(d, px, py, p["name"], taken)
 
 
 def _names(d, names):

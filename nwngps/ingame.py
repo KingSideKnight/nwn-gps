@@ -37,8 +37,8 @@ from .hud import read_target, resolve_target, set_target
 from .memory import k32, modules
 from .nav import Navigator
 from .fullmap import FullMap, frame_size
-from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_MOVED, EV_OPEN, EV_TOGGLE,
-                     Picker)
+from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_LABELS, EV_MOVED, EV_OPEN,
+                     EV_TOGGLE, Picker)
 from . import share
 
 TOAST_SECONDS = 8.0
@@ -170,9 +170,22 @@ def load_position():
         return dict(DEFAULT_POS)
 
 
-def save_position(pos):
+def load_ui():
+    try:
+        ui = json.loads(UI_FILE.read_text())
+        return ui if isinstance(ui, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_ui(**changes):
+    """Merge into ui.json (panel position, pin names on / off)."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    UI_FILE.write_text(json.dumps(pos))
+    UI_FILE.write_text(json.dumps({**load_ui(), **changes}))
+
+
+def save_position(pos):
+    save_ui(**pos)
 
 
 class Shm:
@@ -265,6 +278,7 @@ class InGame:
         self.arrived_at = None
         self.maps, self.map_img = None, None
         self.fullmap, self.fullmap_r, self.last_img = False, None, None
+        self.pin_labels = load_ui().get("pin_labels", True) is not False
         self.toast = None                      # (text, kind, expires_at)
         self.inbox_n, self.inbox_checked = 0, 0.0
         self.jobs = share.Jobs(self.store.world, self.notify)
@@ -371,9 +385,17 @@ class InGame:
                     if self.maps is None:
                         self.maps = maps.Maps(Resources(self.nwsync_host))
                     self.fullmap_r = self.fullmap_r or FullMap(self.store, self.maps)
+                    self.fullmap_r.pin_labels = self.pin_labels
                     self.fullmap_r.rebuild()
                 self.apply_flags()
                 log(f"hotkey: full map {'open' if self.fullmap else 'closed'}")
+            elif t == EV_LABELS:
+                self.pin_labels = not self.pin_labels
+                if self.fullmap_r:
+                    self.fullmap_r.pin_labels = self.pin_labels
+                save_ui(pin_labels=self.pin_labels)
+                self.notify(f"Pin names {'on' if self.pin_labels else 'off'}", "info")
+                log(f"hotkey: pin names {'on' if self.pin_labels else 'off'}")
             elif t == EV_CLEAR:
                 log("hotkey: clear destination")
                 set_target(None)
@@ -499,7 +521,7 @@ class InGame:
         if self.picker.open:
             key = ("picker", self.picker.query, self.picker.sel, len(self.picker.results))
         else:
-            key = (full, data, toast, self.inbox_n, snap.state, snap.area, len(self.pois),
+            key = (full, data, self.pin_labels, toast, self.inbox_n, snap.state, snap.area, len(self.pois),
                    tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                    tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
                    (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)
