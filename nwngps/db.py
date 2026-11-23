@@ -53,15 +53,37 @@ CREATE TABLE IF NOT EXISTS area_tiles (
     tiles       TEXT,       -- JSON [[tile_id, orientation, height], ...] row-major from the SW corner
     seen        REAL
 );
+-- What the GPS noticed the server changed (and undid on its own), so it can be listed and undone.
+CREATE TABLE IF NOT EXISTS changes (
+    id          INTEGER PRIMARY KEY,
+    t           REAL,
+    area        TEXT,
+    what        TEXT,       -- layout | poi_retired | poi_back | link_stale | link_back
+    ref         INTEGER,    -- pois.id / transitions.id (NULL for layout)
+    note        TEXT,
+    data        TEXT,       -- layout: the previous area_tiles row as JSON
+    undone      REAL
+);
 """
 
 # Columns added after the first schema; applied with ALTER TABLE when missing.
 MIGRATIONS = {
     "areas": {"server": "TEXT"},
+    "pois": {"missed": "INTEGER DEFAULT 0",            # visits in a row it wasn't there
+             "retired": "REAL"},                       # when it was hidden as gone (NULL = current)
     "transitions": {"from_server": "TEXT", "to_server": "TEXT",
                     "kind": "TEXT DEFAULT 'walk'",       # walk | portal | jump | death | respawn (edges.py)
-                    "confirmed": "INTEGER DEFAULT 1"},   # 0 = not routed yet (see edges.py)
+                    "confirmed": "INTEGER DEFAULT 1",    # 0 = not routed yet (see edges.py)
+                    "stale": "REAL"},                    # when it stopped being trusted (NULL = fine)
 }
+
+# Map changes (see Store.end_visit). Nothing is ever deleted: retired / stale rows are hidden and
+# come back by themselves when seen again (or with `nwngps changes` / `restore`).
+RETIRE_AFTER = 3          # visits in a row without a pin / door before it is hidden as gone
+GOOD_SCAN = 0.5           # a visit only counts if it saw at least this share of the nearby known ones
+PASSED_NEAR = 15.0        # metres: the game only loads doors near you (an area's count varies 33-47
+                          # as you walk), so something counts as missed only if a scan ran this close
+SAME_DOOR = 1.5           # metres: two links starting this close (or at the same door) share an exit
 
 
 def db_name(world):
@@ -295,21 +317,31 @@ class Store:
             (resref, name, tileset, width, height, now, now, int(visit), server, int(visit)))
         self.db.commit()
 
-    def upsert_poi(self, area, kind, name, tag, x, y, z):
+    def upsert_poi(self, area, kind, name, tag, x, y, z, live=True):
+        """live=False (merging someone else's map): an existing match is left exactly as it is, so
+        an old copy can't bring back a pin / door you've seen the server remove."""
         now = time.time()
-        for r in self.db.execute("SELECT id,x,y FROM pois WHERE area=? AND kind=? AND name IS ? AND tag IS ?",
-                                 (area, kind, name, tag)):
+        for r in self.db.execute("SELECT id,x,y,retired FROM pois WHERE area=? AND kind=? AND name IS ? AND tag IS ?",
+                                 (area, kind, name, tag)).fetchall():
             if dist(r["x"], r["y"], x, y) < POI_MERGE_DIST:
-                self.db.execute("UPDATE pois SET last_seen=? WHERE id=?", (now, r["id"]))
+                if live:
+                    self.db.execute("UPDATE pois SET last_seen=?, missed=0, retired=NULL WHERE id=?", (now, r["id"]))
+                    if r["retired"] is not None:
+                        self.log_change(area, "poi_back", r["id"], f"{kind} {name or ''} is back")
                 return r["id"]
         cur = self.db.execute(
             "INSERT INTO pois(area,kind,name,tag,x,y,z,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?)",
             (area, kind, name, tag, x, y, z, now, now))
         return cur.lastrowid
 
+    def log_change(self, area, what, ref=None, note="", data=None):
+        self.db.execute("INSERT INTO changes(t,area,what,ref,note,data) VALUES(?,?,?,?,?,?)",
+                        (time.time(), area, what, ref, note, data))
+
     def nearest_poi(self, area, x, y, max_dist=VIA_MAX_DIST):
         best = None
-        for r in self.db.execute("SELECT * FROM pois WHERE area=? AND kind IN ('pin','door')", (area,)):
+        for r in self.db.execute("SELECT * FROM pois WHERE area=? AND kind IN ('pin','door') AND retired IS NULL",
+                                 (area,)):
             d = dist(r["x"], r["y"], x, y)
             # prefer pins (Arelith marks transitions with them) when distances are similar
             score = d - (1.0 if r["kind"] == "pin" else 0.0)
@@ -318,13 +350,21 @@ class Store:
         return best[1] if best else None
 
     def add_transition(self, from_area, fpos, to_area, tpos, from_server=None, to_server=None,
-                       kind="walk", confirmed=True):
+                       kind="walk", confirmed=True, live=True):
         """Record (or re-confirm) an edge. Seeing it again confirms it, except: a jump needs
         edges.JUMP_CONFIRM sightings, and a death edge is never confirmed. A jump seen again as a
-        normal walk/portal (a door turned up there) becomes that kind."""
+        normal walk/portal (a door turned up there) becomes that kind. Walking a stale link again
+        (live) makes it trusted again; a new link out of the same door makes older ones to other
+        places stale (the server re-pointed the door). live=False: merging someone else's map."""
         now = time.time()
-        for r in self.db.execute("SELECT * FROM transitions WHERE from_area=? AND to_area=?", (from_area, to_area)):
+        for r in self.db.execute("SELECT * FROM transitions WHERE from_area=? AND to_area=?",
+                                 (from_area, to_area)).fetchall():
             if dist(r["from_x"], r["from_y"], fpos[0], fpos[1]) < TRANS_MERGE_DIST:
+                if not live and r["stale"] is not None:
+                    return r["id"], False
+                if r["stale"] is not None:
+                    self.db.execute("UPDATE transitions SET stale=NULL WHERE id=?", (r["id"],))
+                    self.log_change(from_area, "link_back", r["id"], "walked again: trusted again")
                 old = r["kind"] or "walk"
                 new_kind = kind if (old == "jump" and kind in E.REVERSIBLE) else old
                 if new_kind in E.NEVER_ROUTED:
@@ -335,6 +375,10 @@ class Store:
                     ok = 1
                 self.db.execute("UPDATE transitions SET count=count+1, last_seen=?, confirmed=?, kind=? WHERE id=?",
                                 (now, ok, new_kind, r["id"]))
+                if live:      # where you arrive is where you arrive now (the far side may have moved)
+                    self.db.execute("UPDATE transitions SET to_x=?, to_y=?, to_z=? WHERE id=?", (*tpos, r["id"]))
+                if live and new_kind in E.REVERSIBLE:
+                    self._supersede(r["id"], from_area, fpos, to_area)
                 self.db.commit()
                 return r["id"], False
         via = self.nearest_poi(from_area, fpos[0], fpos[1])
@@ -344,8 +388,140 @@ class Store:
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (from_area, *fpos, to_area, *tpos, via["id"] if via else None, now, now,
              from_server, to_server, kind, int(confirmed)))
+        if kind in E.REVERSIBLE and live:
+            self._supersede(cur.lastrowid, from_area, fpos, to_area)
+        elif kind in E.REVERSIBLE and self._exit_taken(cur.lastrowid, from_area, fpos, to_area):
+            # someone else's link out of a door that (for you) leads elsewhere: yours wins
+            self.mark_stale(cur.lastrowid, from_area, "imported; that exit leads elsewhere in your map")
         self.db.commit()
         return cur.lastrowid, True
+
+    def _same_exit(self, tid, from_area, fpos, to_area):
+        """Trusted walk / portal links leaving from the same spot as `fpos` to another area.
+        By distance only: one map pin often labels two neighbouring doors."""
+        return [r for r in self.db.execute("SELECT * FROM transitions WHERE from_area=? AND to_area!=? "
+                                           "AND stale IS NULL AND kind IN ('walk','portal') AND id!=?",
+                                           (from_area, to_area, tid)).fetchall()
+                if dist(r["from_x"], r["from_y"], fpos[0], fpos[1]) < SAME_DOOR]
+
+    def _exit_taken(self, tid, from_area, fpos, to_area):
+        return bool(self._same_exit(tid, from_area, fpos, to_area))
+
+    def _supersede(self, tid, from_area, fpos, to_area):
+        """The exit you just used now leads to `to_area`: older links out of the same door to
+        somewhere else stop being trusted."""
+        for r in self._same_exit(tid, from_area, fpos, to_area):
+            self.mark_stale(r["id"], from_area, f"same exit now leads to {self.area_name(to_area)}")
+
+    def mark_stale(self, tid, area, why):
+        self.db.execute("UPDATE transitions SET stale=? WHERE id=?", (time.time(), tid))
+        self.log_change(area, "link_stale", tid, why)
+
+    def end_visit(self, area, seen_ids, path, kinds=("pin", "door"), size=None):
+        """After a visit: pins / doors of `kinds` that a scan ran within PASSED_NEAR of (path:
+        your position at each scan) but that weren't there are counted as missed, and hidden once missed
+        RETIRE_AFTER visits in a row. Then links out of the area that no longer start at a door,
+        pin or map edge stop being trusted. Visits that saw too little of what we know nearby
+        (still loading, a bad read) count for nothing. Returns {"retired": [...], "stale": [...]}
+        or None if the visit didn't count."""
+        out = {"retired": [], "stale": []}
+        if not kinds or not path:
+            return out
+        ph = ",".join("?" * len(kinds))
+        known = [r for r in self.db.execute(f"SELECT id, kind, name, missed, x, y FROM pois WHERE area=? "
+                                            f"AND kind IN ({ph}) AND retired IS NULL", (area, *kinds)).fetchall()
+                 if any(dist(r["x"], r["y"], px, py) <= PASSED_NEAR for px, py in path)]
+        seen = set(seen_ids)
+        if not known:
+            return out
+        if not seen or sum(r["id"] in seen for r in known) < GOOD_SCAN * len(known):
+            return None
+        now = time.time()
+        for r in known:
+            if r["id"] in seen:
+                if r["missed"]:
+                    self.db.execute("UPDATE pois SET missed=0 WHERE id=?", (r["id"],))
+                continue
+            missed = (r["missed"] or 0) + 1
+            if missed >= RETIRE_AFTER:
+                self.db.execute("UPDATE pois SET missed=?, retired=? WHERE id=?", (missed, now, r["id"]))
+                self.log_change(area, "poi_retired", r["id"],
+                                f"{r['kind']} {r['name'] or ''} not seen {missed} visits in a row")
+                out["retired"].append(r["id"])
+            else:
+                self.db.execute("UPDATE pois SET missed=? WHERE id=?", (missed, r["id"]))
+        if out["retired"]:
+            out["stale"] = self.check_links(area, size)
+        self.db.commit()
+        return out
+
+    def check_links(self, area, size=None):
+        """Walk / portal links out of `area` whose start has no door, pin or map edge any more.
+        If the area's size is unknown (no edge test possible), only links whose own door / pin
+        was retired are touched."""
+        out = []
+        if not size:
+            a = self.area(area)
+            size = (a["width"], a["height"]) if a and a["width"] and a["height"] else None
+        for r in self.db.execute("SELECT t.*, p.retired AS via_retired FROM transitions t "
+                                 "LEFT JOIN pois p ON p.id=t.via_poi WHERE t.from_area=? AND t.stale IS NULL "
+                                 "AND t.kind IN ('walk','portal')", (area,)).fetchall():
+            if size is None and r["via_retired"] is None:
+                continue
+            via = self.nearest_poi(area, r["from_x"], r["from_y"], max_dist=E.DOOR_NEAR)
+            d = dist(via["x"], via["y"], r["from_x"], r["from_y"]) if via else None
+            if not E.natural_exit(r["from_x"], r["from_y"], size, d):
+                self.mark_stale(r["id"], area, "its door / pin is gone")
+                out.append(r["id"])
+        return out
+
+    def check_layout(self, resref, tileset, w, h, tiles):
+        """Compare a freshly read tile layout with the saved one. Saves it if there was none;
+        if it differs, backs up the database, keeps the old layout in `changes` and saves the
+        new one. Returns None (no change), "new" or "changed"."""
+        import json
+        old = self.db.execute("SELECT * FROM area_tiles WHERE resref=?", (resref,)).fetchone()
+        if old is None:
+            self.save_tiles(resref, tileset, w, h, tiles)
+            return "new"
+        if (old["tileset"], old["width"], old["height"]) == (tileset, w, h) and \
+                [list(t) for t in json.loads(old["tiles"])] == [list(t) for t in tiles]:
+            return None
+        self.backup("before-layout")
+        self.log_change(resref, "layout", None,
+                        f"layout changed ({old['width']}x{old['height']} {old['tileset']} -> {w}x{h} {tileset})",
+                        json.dumps({k: old[k] for k in ("tileset", "width", "height", "tiles")}))
+        self.save_tiles(resref, tileset, w, h, tiles)
+        return "changed"
+
+    def changes(self, area=None, limit=50):
+        q = ("SELECT c.*, a.name AS area_name FROM changes c LEFT JOIN areas a ON a.resref=c.area"
+             + (" WHERE c.area=?" if area else "") + " ORDER BY c.id DESC LIMIT ?")
+        return self.db.execute(q, ((area, limit) if area else (limit,))).fetchall()
+
+    def restore(self, change_id):
+        """Undo one change the GPS made by itself. Returns a description, or None if there's
+        nothing to undo (unknown id, already undone, or a 'back' entry)."""
+        import json
+        c = self.db.execute("SELECT * FROM changes WHERE id=?", (change_id,)).fetchone()
+        if not c or c["undone"] is not None or c["what"] not in ("layout", "poi_retired", "link_stale"):
+            return None
+        self.backup("before-restore")
+        if c["what"] == "layout":
+            old = json.loads(c["data"])
+            self.save_tiles(c["area"], old["tileset"], old["width"], old["height"], json.loads(old["tiles"]))
+        elif c["what"] == "poi_retired":
+            self.db.execute("UPDATE pois SET retired=NULL, missed=0 WHERE id=?", (c["ref"],))
+        else:
+            self.db.execute("UPDATE transitions SET stale=NULL WHERE id=?", (c["ref"],))
+        self.db.execute("UPDATE changes SET undone=? WHERE id=?", (time.time(), change_id))
+        self.db.commit()
+        return c["note"]
+
+    def links_version(self):
+        """Changes whenever links are added, walked again, or stop / start being trusted."""
+        return tuple(self.db.execute("SELECT COUNT(*), MAX(last_seen), MAX(stale), SUM(stale IS NULL) "
+                                     "FROM transitions").fetchone())
 
     def promote_jumps(self, area):
         """Unconfirmed jumps out of `area` that turn out to start at a door / pin we know now
@@ -382,6 +558,8 @@ class Store:
             self.db.execute("UPDATE transitions SET kind=? WHERE id=?", (kind, tid))
         if confirmed is not None:
             self.db.execute("UPDATE transitions SET confirmed=? WHERE id=?", (int(bool(confirmed)), tid))
+            if confirmed:                 # trusting it by hand also overrides "the map changed"
+                self.db.execute("UPDATE transitions SET stale=NULL WHERE id=?", (tid,))
         self.db.commit()
         return True
 
@@ -423,12 +601,22 @@ class Store:
             "WHERE name LIKE ? OR resref LIKE ? ORDER BY visits DESC LIMIT ?", (like, like, limit)).fetchall()
         pois = self.db.execute(
             "SELECT p.kind, p.area, p.name || COALESCE(' ['||p.tag||']','') AS name, p.x, p.y FROM pois p "
-            "WHERE (p.name LIKE ? OR p.tag LIKE ?) AND p.name NOT IN ('Door','Window') LIMIT ?",
-            (like, like, limit)).fetchall()
+            "WHERE (p.name LIKE ? OR p.tag LIKE ?) AND p.name NOT IN ('Door','Window') AND p.retired IS NULL "
+            "LIMIT ?", (like, like, limit)).fetchall()
         return list(areas) + list(pois)
 
-    def transitions(self, include_unconfirmed=False):
-        q = "SELECT * FROM transitions" + ("" if include_unconfirmed else " WHERE confirmed=1")
+    def area_pois(self, area):
+        """Current (not retired) pins, doors and your own markers in an area, for drawing."""
+        return self.db.execute("SELECT kind,name,x,y FROM pois WHERE area=? AND retired IS NULL", (area,)).fetchall()
+
+    def pois_version(self, area):
+        """Changes when a pin / door is added, retired or comes back (the recorder is another process)."""
+        return (area, *self.db.execute("SELECT SUM(retired IS NULL), MAX(CASE WHEN retired IS NULL THEN id END), "
+                                       "MAX(retired), COUNT(*) FROM pois WHERE area=?", (area,)).fetchone())
+
+    def transitions(self, include_unconfirmed=False, include_stale=False):
+        where = [w for w, on in (("confirmed=1", not include_unconfirmed), ("stale IS NULL", not include_stale)) if on]
+        q = "SELECT * FROM transitions" + (" WHERE " + " AND ".join(where) if where else "")
         return self.db.execute(q).fetchall()
 
     def poi(self, pid):
@@ -449,6 +637,7 @@ class Store:
                 out.execute("UPDATE pois SET first_seen=NULL, last_seen=NULL")
                 out.execute("UPDATE transitions SET first_seen=NULL, last_seen=NULL")
                 out.execute("UPDATE area_tiles SET seen=NULL")
+                out.execute("DELETE FROM changes")              # your own play history
             out.execute("VACUUM")             # don't leave the old values in free pages
         out.close()
         return dest
@@ -464,7 +653,7 @@ class Store:
         have none. Returns counts of what was added. (For a dry run, merge into an export() copy.)"""
         other = open_untrusted(other_path)
         added = {"areas": 0, "areas_updated": 0, "pois": 0, "transitions": 0, "transitions_seen_again": 0,
-                 "tile_layouts": 0, "rejected": 0}
+                 "tile_layouts": 0, "gone_skipped": 0, "rejected": 0}
         try:
             tables = {r[0] for r in other.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             for r in other.execute("SELECT * FROM areas LIMIT ?", (MAX_ROWS["areas"],)):
@@ -488,21 +677,30 @@ class Store:
                     (r["resref"], r["name"], r["tileset"], r["width"], r["height"],
                      r["first_seen"], r["first_seen"], r["server"]))
             before = self.stats()["pois"]
+            # Their pins / doors / links the server has since removed (retired / stale in their copy)
+            # are skipped, and nothing of theirs brings back one you've seen go (live=False).
             for r in other.execute("SELECT * FROM pois LIMIT ?", (MAX_ROWS["pois"],)):
+                if r.keys().count("retired") and r["retired"] is not None:
+                    added["gone_skipped"] += 1
+                    continue
                 r = clean_poi(dict(r))
                 if r is None:
                     added["rejected"] += 1
                     continue
-                self.upsert_poi(r["area"], r["kind"], r["name"], r["tag"], r["x"], r["y"], r["z"])
+                self.upsert_poi(r["area"], r["kind"], r["name"], r["tag"], r["x"], r["y"], r["z"], live=False)
             added["pois"] = self.stats()["pois"] - before
             for r in other.execute("SELECT * FROM transitions LIMIT ?", (MAX_ROWS["transitions"],)):
+                if r.keys().count("stale") and r["stale"] is not None:
+                    added["gone_skipped"] += 1
+                    continue
                 r = clean_transition(dict(r))
                 if r is None:
                     added["rejected"] += 1
                     continue
                 _, new = self.add_transition(r["from_area"], (r["from_x"], r["from_y"], r["from_z"]),
                                              r["to_area"], (r["to_x"], r["to_y"], r["to_z"]),
-                                             r["from_server"], r["to_server"], r["kind"], r["confirmed"])
+                                             r["from_server"], r["to_server"], r["kind"], r["confirmed"],
+                                             live=False)
                 added["transitions" if new else "transitions_seen_again"] += 1
             if "area_tiles" in tables:
                 for r in other.execute("SELECT resref, tileset, width, height, tiles FROM area_tiles LIMIT ?",

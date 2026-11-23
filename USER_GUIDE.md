@@ -62,6 +62,30 @@ around and possess creatures constantly, which would fill the map with bogus lin
 `"dm_mode": true` before using it there: areas, map pins, doors and area maps are still recorded,
 but no links between areas. NWN GPS can't tell a DM session apart by itself yet.
 
+## When the server changes a map
+Servers rebuild areas, move doors and re-point exits. NWN GPS keeps checking what it sees, and
+it never deletes anything by itself: what it stops using is only hidden, and you can undo it.
+
+- **A changed area layout** is noticed the next time you're there (it has to read the same new
+  layout twice, so a half-loaded area can't overwrite a good map). The new picture replaces the old
+  one, the world map redraws, and the old layout is kept.
+- **A pin or door that's gone** is hidden once it has been missing on **3 visits in a row**. The
+  game only loads doors near you, so a visit only counts against a pin or door if you were within
+  about 15 m of it. Visits that saw too little of what's known (still loading) don't count. If it
+  turns up again it's back straight away.
+- **An exit that leads somewhere new:** once you walk it, older links out of that same door stop
+  being used. A link whose door or pin is gone (and that isn't at the map edge) stops being used
+  too. Walking an old link again makes it trusted again.
+- **Friends' maps can't undo this.** Merging an older map doesn't bring back what you've seen
+  removed, their own retired pins and stale links are skipped, and if their link leaves a door
+  that leads somewhere else in your map, yours wins.
+
+To see what was noticed: `NWN-GPS.exe cli changes` (or `changes "<area name>"`). To undo one:
+`NWN-GPS.exe cli restore <id>`. Your map is backed up first, and a layout change also makes a
+backup when it happens. If the server really did remove something, it's hidden again after 3 more
+visits. `cli links` marks links that are no longer used as "stale"; `trust-link <id>` puts one
+back by hand.
+
 ## Sharing maps with friends
 - **Ctrl+Shift+E** saves your map to `Documents\NWN GPS\Exports`. Send that `.sqlite` file to a friend.
 - Put files you receive into `Documents\NWN GPS\Inbox`, then press **Ctrl+Shift+I**.
@@ -102,7 +126,8 @@ but no links between areas. NWN GPS can't tell a DM session apart by itself yet.
   restarting it and shows the error.
 
 ## Your data
-- Maps: `Documents\NWN GPS\data\<world>.sqlite`, with automatic backups in `data\backups\` before imports.
+- Maps: `Documents\NWN GPS\data\<world>.sqlite`, with automatic backups in `data\backups\` before
+  imports, restores, forgotten links and noticed layout changes.
 - Nothing is uploaded anywhere. Sharing only happens when you send an exported file yourself.
 - To remove NWN GPS: delete its folder and `Documents\NWN GPS`.
 

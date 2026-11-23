@@ -152,12 +152,13 @@ def _font(size, bold=False):
     return ImageFont.load_default()
 
 
-_art_cache = {}            # (area, w_px, h_px) -> scaled tile art (bounded LRU)
+_art_cache = {}            # (area, layout saved at, w_px, h_px) -> scaled tile art (bounded LRU)
 ART_CACHE_MAX = 96
 
 
 def _area_art(store, maps, area, wpx, hpx):
-    key = (area, wpx, hpx)
+    saved = store.db.execute("SELECT seen FROM area_tiles WHERE resref=?", (area,)).fetchone()
+    key = (area, saved[0] if saved else None, wpx, hpx)       # a replaced layout gets new art
     if key in _art_cache:
         _art_cache[key] = _art_cache.pop(key)        # most recently used last
         return _art_cache[key]

@@ -238,8 +238,7 @@ class Overlay:
     def _draw_map(self, s, g):
         c = self.c
         if self.pois_area != s.area:
-            self.area_pois = self.store.db.execute(
-                "SELECT kind,name,x,y FROM pois WHERE area=?", (s.area,)).fetchall()
+            self.area_pois = self.store.area_pois(s.area)
             self.pois_area = s.area
         w_m = (s.size[0] or 0) * 10 if s.size else 0
         h_m = (s.size[1] or 0) * 10 if s.size else 0

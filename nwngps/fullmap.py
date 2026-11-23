@@ -34,11 +34,12 @@ class FullMap:
         self.world, self.cache, self.built_version = None, {}, None
 
     def version(self):
-        """Changes whenever the recorder (another process) adds areas, links or area maps."""
+        """Changes whenever the recorder (another process) adds areas, adds or distrusts links,
+        or saves / replaces an area map."""
         db = self.store.db
         return (db.execute("SELECT COUNT(*) FROM areas").fetchone()[0],
-                *db.execute("SELECT COUNT(*), MAX(last_seen) FROM transitions").fetchone(),
-                db.execute("SELECT COUNT(*) FROM area_tiles").fetchone()[0])
+                *self.store.links_version(),
+                *db.execute("SELECT COUNT(*), MAX(seen) FROM area_tiles").fetchone())
 
     def rebuild(self):
         self.built_version = self.version()
@@ -149,7 +150,7 @@ class FullMap:
         ppx = src.width / w_m                       # source pixels per metre
         to_px = self._fit(img, src, box)
         d = ImageDraw.Draw(img)
-        pois = self.store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (snap.area,)).fetchall()
+        pois = self.store.area_pois(snap.area)
         for p in display_pois(pois):
             if p["kind"] != "pin":
                 continue

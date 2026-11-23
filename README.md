@@ -11,7 +11,10 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
 - **Recording:** `nwngps/recorder.py` -> SQLite per world (`db.py`), including portals between
   linked servers. `nwngps/edges.py` classifies each area change (walk / portal / jump / death /
   respawn) so teleports, deaths and DM moves don't become directions. DM client support
-  (`"dm_mode"`) is experimental and untested.
+  (`"dm_mode"`) is experimental and untested. Server-side map changes are tracked per visit
+  (`Store.end_visit` / `check_layout`): changed layouts are replaced, pins / doors missing 3 visits
+  in a row are retired, and links out of removed or re-pointed exits go stale. Nothing is deleted,
+  and the `changes` table lets `cli restore` undo each one.
 - **Drawing in-game:** `native/nwngps_gl.c` is loaded into the game at runtime; it swaps
   `GDI32!SwapBuffers` in nwmain's import table, draws a texture Python publishes through shared
   memory, reads hotkeys via a window subclass, and unhooks/unloads on request. No game files change.

@@ -47,7 +47,7 @@ class Navigator:
 
     def _graph(self):
         """Route graph, rebuilt only when the recorder has added or updated transitions."""
-        version = tuple(self.store.db.execute("SELECT COUNT(*), MAX(last_seen) FROM transitions").fetchone())
+        version = self.store.links_version()
         if version != getattr(self, "_graph_version", None):
             self._graph_index = R.edge_index(self.store.transitions())
             self._graph_version = version

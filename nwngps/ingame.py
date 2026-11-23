@@ -282,9 +282,9 @@ class InGame:
     def load_pois(self, area):
         """The area's pins and doors, re-read only when the recorder (another process) changed them."""
         self.pois_checked = time.time()
-        version = (area, *self.store.db.execute("SELECT COUNT(*), MAX(id) FROM pois WHERE area=?", (area,)).fetchone())
+        version = self.store.pois_version(area)
         if version != getattr(self, "pois_version", None):
-            self.pois = self.store.db.execute("SELECT kind,name,x,y FROM pois WHERE area=?", (area,)).fetchall()
+            self.pois = self.store.area_pois(area)
             self.pois_version = version
 
     def heartbeat(self):

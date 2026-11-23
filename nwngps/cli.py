@@ -11,6 +11,8 @@
   python -m nwngps.cli links [area text]                  recorded links between areas (id, kind, trusted?)
   python -m nwngps.cli trust-link <id> | distrust-link <id>   use / stop using a link for directions
   python -m nwngps.cli forget-link <id>                   delete a wrong link (backs your map up first)
+  python -m nwngps.cli changes [area text]                what the GPS noticed the server changed
+  python -m nwngps.cli restore <id>                       undo one of those (backs your map up first)
   python -m nwngps.cli import-jsonl <transitions.jsonl>
 
 Without --from, `route` starts from where your character is right now (game must be running).
@@ -109,8 +111,10 @@ def cmd_links(store, args):
         area = found[0]
     rows = store.links(area)
     for r in rows:
-        trusted = "yes" if r["confirmed"] and r["kind"] != "death" else "no "
+        trusted = "yes" if r["confirmed"] and r["kind"] != "death" and r["stale"] is None else "no "
         note = KIND_NOTE.get(r["kind"] or "walk", r["kind"])
+        if r["stale"] is not None:
+            note = (note + ", " if note else "") + "stale: the map changed (see `changes`)"
         print(f"{r['id']:5}  used for directions: {trusted}  x{r['count'] or 1:<3} "
               f"{r['from_name'] or r['from_area']} ({r['from_x']:.0f}, {r['from_y']:.0f}) -> "
               f"{r['to_name'] or r['to_area']}{'  [' + note + ']' if note else ''}")
@@ -131,6 +135,39 @@ def cmd_fix_link(store, cmd, args):
     ok = store.set_link(tid, confirmed=(cmd == "trust-link"))
     print(f"link {tid} {'will' if cmd == 'trust-link' else 'will not'} be used for directions" if ok
           else f"no link {tid}")
+
+
+CHANGE_LABEL = {"layout": "MAP LAYOUT CHANGED", "poi_retired": "pin/door hidden (gone)",
+                "poi_back": "pin/door back", "link_stale": "link not trusted", "link_back": "link trusted again"}
+
+
+def cmd_changes(store, args):
+    area = None
+    if args:
+        text = " ".join(args).lower()
+        found = [a["resref"] for a in store.db.execute("SELECT resref, name FROM areas")
+                 if text in (a["name"] or "").lower() or text in a["resref"].lower()]
+        if not found:
+            sys.exit(f"no area matches {text!r}")
+        area = found[0]
+    rows = store.changes(area)
+    for c in reversed(rows):
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(c["t"])) if c["t"] else "?"
+        undo = "  [undone]" if c["undone"] else ""
+        print(f"{c['id']:5}  {when}  {c['area_name'] or c['area']}: "
+              f"{CHANGE_LABEL.get(c['what'], c['what'])} - {c['note']}{undo}")
+    if not rows:
+        print("No map changes noticed yet.")
+    else:
+        print(f"{len(rows)} changes (newest last). Undo one with: restore <id>")
+
+
+def cmd_restore(store, args):
+    if not args or not args[0].isdigit():
+        sys.exit("usage: cli restore <id>   (ids are listed by `changes`)")
+    note = store.restore(int(args[0]))
+    print(f"undone: {note} (your map was backed up first)" if note
+          else f"change {args[0]} can't be undone (unknown, already undone, or nothing to undo)")
 
 
 def main():
@@ -162,6 +199,10 @@ def main():
             cmd_links(store, args)
         elif cmd in ("trust-link", "distrust-link", "forget-link"):
             cmd_fix_link(store, cmd, args)
+        elif cmd == "changes":
+            cmd_changes(store, args)
+        elif cmd == "restore":
+            cmd_restore(store, args)
         elif cmd == "worldmap":
             from . import maps as maps_mod, worldmap
             from .resources import Resources

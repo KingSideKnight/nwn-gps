@@ -45,6 +45,7 @@ class Recorder:
         self.pois_at = 0.0
         self.settings = config.load_settings()
         self.dm_logged = False
+        self.visit = None           # this area visit: POI ids seen, scans, layout check (end_visit)
 
     def store(self, world):
         if world not in self.stores:
@@ -105,18 +106,67 @@ class Recorder:
         if prev.area != snap.area:
             self.edge(st, prev, snap)
 
+    def check_layout(self, st, snap, mem):
+        """Read the tile layout; a layout different from the saved one is only accepted once two
+        reads in a row agree (a half-loaded area must not overwrite a good map)."""
+        tiles = maps.read_tiles(mem, snap.area_ptr, *snap.size)
+        if not tiles:
+            return
+        key = (snap.tileset, *snap.size, tuple(map(tuple, tiles)))
+        rec = st.tiles(snap.area)
+        if rec and (rec[0], rec[1], rec[2], tuple(map(tuple, rec[3]))) == key:
+            self.visit["layout_done"] = True
+            return
+        if rec and self.visit.get("layout_candidate") != key:
+            self.visit["layout_candidate"] = key        # confirm on the next scan
+            return
+        result = st.check_layout(snap.area, snap.tileset, *snap.size, tiles)
+        self.visit["layout_done"] = True
+        if result == "new":
+            log(f"  tile layout saved ({snap.size[0]}x{snap.size[1]}, {snap.tileset})")
+        elif result == "changed":
+            log(f"  MAP CHANGED: {snap.area_name}'s layout is different now; saved the new one "
+                f"(old one kept: nwngps changes)")
+            for tid in st.check_links(snap.area, snap.size):
+                log(f"  link {tid} out of {snap.area_name} starts where nothing is any more: "
+                    f"not used for directions")
+            st.commit()
+
+    def end_visit(self):
+        """Leaving an area: pins / doors that weren't there count as missed (see Store.end_visit)."""
+        v, self.visit = self.visit, None
+        if not v or v["scans"] < 2 or self.settings.get("dm_mode"):
+            return
+        st = self.store(v["world"])
+        res = st.end_visit(v["area"], v["seen"], v["path"], kinds=tuple(sorted(v["kinds"])), size=v["size"])
+        if res is None:
+            log(f"  {v['name']}: saw too little of what's known to check for removed pins / doors")
+            return
+        for pid in res["retired"]:
+            p = st.poi(pid)
+            log(f"  {v['name']}: {p['kind']} \"{p['name'] or ''}\" gone {p['missed']} visits in a row: "
+                f"hidden (nwngps changes / restore)")
+        for tid in res["stale"]:
+            log(f"  link {tid} out of {v['name']} starts where nothing is any more: not used for directions")
+
     def record_pois(self, snap):
         st = self.store(snap.world)
         mem, table = self.session.mem, self.session.table
-        if snap.size and not st.tiles(snap.area):
-            tiles = maps.read_tiles(mem, snap.area_ptr, *snap.size)
-            if tiles:
-                st.save_tiles(snap.area, snap.tileset, *snap.size, tiles)
-                log(f"  tile layout saved ({snap.size[0]}x{snap.size[1]}, {snap.tileset})")
+        if self.visit is None or self.visit["area"] != snap.area or self.visit["world"] != snap.world:
+            self.visit = {"world": snap.world, "area": snap.area, "name": snap.area_name, "size": snap.size,
+                          "seen": set(), "kinds": {"pin", "door"}, "scans": 0, "path": []}
+        if snap.size and not self.visit.get("layout_done"):
+            self.check_layout(st, snap, mem)
         pois = objects.map_pins(mem, snap.area_ptr) + (objects.doors(mem, snap.area_ptr, table) if table else [])
+        if not table:
+            self.visit["kinds"].discard("door")     # doors weren't read: don't count them as missing
         before = st.stats()["pois"]
         for p in pois:
-            st.upsert_poi(snap.area, p["kind"], p["name"], p["tag"], *[round(v, 2) for v in p["pos"]])
+            self.visit["seen"].add(
+                st.upsert_poi(snap.area, p["kind"], p["name"], p["tag"], *[round(v, 2) for v in p["pos"]]))
+        self.visit["scans"] += 1
+        if snap.pos:           # where you were when the scan ran (doors load only near you)
+            self.visit["path"].append(tuple(snap.pos[:2]))
         st.commit()
         new = st.stats()["pois"] - before
         if new:
@@ -140,6 +190,7 @@ class Recorder:
         changed = (self.last is None or snap.area != self.last.area or snap.server != self.last.server
                    or self.saw_menu or self.restarted)
         if changed:
+            self.end_visit()
             self.on_arrival(snap)
             self.entered_at, self.pois_at = now, 0.0
             self.saw_menu = self.restarted = False
