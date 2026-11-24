@@ -21,6 +21,7 @@
 #include <GL/gl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- shared memory layout v2 (keep in sync with nwngps/ingame.py) ---- */
@@ -48,6 +49,8 @@
 #define EV_IMPORT 9u   /* Ctrl+Shift+I: merge maps waiting in the inbox folder */
 #define EV_LABELS 10u  /* Ctrl+Shift+L: pin names on the full map on / off */
 #define EV_MAPKEY 11u  /* code = virtual key pressed while the full map is open (Esc, arrows, Home, +/-) */
+#define EV_MAPCLICK 12u /* left click (not a drag) on the open full map: code = x | y << 16, window pixels */
+#define CLICK_SLOP 5    /* pixels the mouse may move between press and release and still be a click */
 
 /* anchors: which screen corner the offsets are measured from */
 #define ANCHOR_TR 0u
@@ -431,6 +434,7 @@ static volatile LONG g_capturing = 0;
 static int g_swallow_char = 0;   /* eat the WM_CHAR that follows a swallowed Enter/Esc/hotkey */
 static WPARAM g_swallow_up = 0;  /* eat the key-up of a key the full map took */
 static int g_mapdrag = 0, g_mapdrag_x = 0, g_mapdrag_y = 0;   /* dragging the full map */
+static int g_mapdown_x = 0, g_mapdown_y = 0, g_mapmoved = 0;  /* where the press was; moved too far to be a click */
 
 static int map_open(void) {
     return g_shm && (g_shm->flags & FLAG_FULLSCREEN) && !g_capturing;
@@ -486,8 +490,9 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (map_open()) {                  /* drag the full map around */
                 g_mapdrag = 1;
-                g_mapdrag_x = mx;
-                g_mapdrag_y = my;
+                g_mapdrag_x = g_mapdown_x = mx;
+                g_mapdrag_y = g_mapdown_y = my;
+                g_mapmoved = 0;
                 SetCapture(h);
                 return 0;
             }
@@ -495,6 +500,7 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_MOUSEMOVE:
             if (g_dragging) { set_position(mx - g_drag_dx, my - g_drag_dy); return 0; }
             if (g_mapdrag) {
+                if (abs(mx - g_mapdown_x) > CLICK_SLOP || abs(my - g_mapdown_y) > CLICK_SLOP) g_mapmoved = 1;
                 g_shm->map_drag_x += mx - g_mapdrag_x;
                 g_shm->map_drag_y += my - g_mapdrag_y;
                 g_mapdrag_x = mx;
@@ -514,7 +520,13 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (map_open()) return 0;          /* clicks on the map don't walk / act in the game */
             break;
         case WM_LBUTTONUP:
-            if (g_mapdrag) { g_mapdrag = 0; ReleaseCapture(); return 0; }
+            if (g_mapdrag) {
+                g_mapdrag = 0;
+                ReleaseCapture();
+                if (!g_mapmoved && map_open() && mx >= 0 && my >= 0 && mx < 65536 && my < 65536)
+                    push_event(EV_MAPCLICK, (uint32_t)mx | ((uint32_t)my << 16));   /* a click: go there */
+                return 0;
+            }
             if (g_dragging) {
                 g_dragging = 0;
                 ReleaseCapture();

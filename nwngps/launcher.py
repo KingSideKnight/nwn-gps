@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-from . import config
+from . import __version__, config
 
 PARTS = {"recorder": "recorder", "in-game GPS": "ingame"}
 RESTART_DELAY = 5.0
@@ -30,6 +30,9 @@ NOTICE = """
    the game client. Check your server's rules before you use it.
    You use it at your own risk.
  * Start the game normally (not "as administrator").
+ * Once a day it asks GitHub whether a newer version is out (GitHub
+   sees your IP address, nothing else). Nothing is downloaded. You
+   can turn this off in Settings (press S in this window).
  * Settings:  {settings}
  * Maps to share / receive:  {share}
 =====================================================================
@@ -120,6 +123,35 @@ def first_run_notice():
     return True
 
 
+def console_keys():
+    """A function returning the key pressed in this console window (or None), if there is one."""
+    if sys.platform != "win32" or not sys.stdin or not sys.stdin.isatty():
+        return None
+    import msvcrt
+
+    def read():
+        if not msvcrt.kbhit():
+            return None
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):        # arrow / function keys come as two characters
+            msvcrt.getwch()
+            return None
+        return ch
+    return read
+
+
+def update_check():
+    """Background: tell the player when a newer release is out (never blocks starting up)."""
+    from . import updates
+    try:
+        status, version, url = updates.check(config.load_settings())
+    except Exception:
+        return
+    if status == "new":
+        print(time.strftime("%H:%M:%S"), f"NWN GPS {version} is available (you have {__version__}). "
+                                         f"Download it from {url}")
+
+
 def main():
     from .single import single_instance
     single_instance("launcher")
@@ -132,9 +164,15 @@ def main():
     from . import hotkeys
     hk = hotkeys.resolve(config.load_settings()["hotkeys"], warn=lambda m: print("  " + m))
     print("  in game: " + ", ".join(f"{v[2]} {hotkeys.LABELS[a].lower()}" for a, v in hk.items()))
+    keys = console_keys()
+    if keys:
+        print("  press S in this window to open Settings")
+    import threading
+    threading.Thread(target=update_check, name="update-check", daemon=True).start()
     global JOB
     JOB = kill_with_launcher_job()
     procs = {name: start(part) for name, part in PARTS.items()}
+    settings_window = None
     died_at, fast_crashes, given_up = {}, {name: 0 for name in PARTS}, set()
     try:
         while True:
@@ -161,7 +199,11 @@ def main():
             if len(given_up) == len(PARTS):
                 print("Nothing left running. Close this window, fix the problem above, and start NWN GPS again.")
                 break
-            time.sleep(1)
+            for _ in range(5):
+                if keys and keys() in ("s", "S") and (settings_window is None or settings_window.poll() is not None):
+                    print(time.strftime("%H:%M:%S"), "opening Settings")
+                    settings_window = subprocess.Popen(command("settings"), cwd=config.app_dir())
+                time.sleep(0.2)
     except KeyboardInterrupt:
         print("stopping...")
     finally:

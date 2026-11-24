@@ -23,7 +23,12 @@ about every way outside data can reach it. This file lists those ways and what p
 | Process access for injection | Only `CreateRemoteThread`/`VirtualAllocEx`/`WriteProcessMemory` to pass the DLL path to `LoadLibraryW`; nothing else is written into the game. |
 
 ## Privacy
-- Nothing is sent over the network. Sharing only happens when you send a file yourself.
+- The only network request is the daily update check (`nwngps/updates.py`, on by default, off in
+  Settings or with `"check_updates": false`): one HTTPS GET to `api.github.com` for this project's
+  release list, with a `NWN-GPS/<version>` user agent. GitHub sees your IP address; nothing about
+  you, your game or your maps is sent. Nothing is downloaded or installed, and the link shown is
+  built from the version number, never taken from the response.
+- Sharing maps only happens when you send a file yourself.
 - Exported maps (`Ctrl+Shift+E`, `cli export`) have play times and visit counts removed.
 - Logs contain areas, positions and hotkey/picker actions, never account names or CD keys.
   (Developer recon tools in `recon/` *can* print such values from memory; their output folder is

@@ -17,6 +17,7 @@ MAX_VIEW = 1200.0     # metres across: bigger clusters show a window this wide t
 MIN_SPAN = 150.0      # metres across: closest zoom
 ZOOM_STEP = 1.25      # one wheel notch / one +/- press
 PAN_STEP = 0.25       # an arrow key scrolls this share of the view
+HIT_RADIUS = 14       # frame pixels: a click this close to a marker picks the marker
 
 
 def frame_size(view_w, view_h, max_w=1600):
@@ -39,6 +40,7 @@ class FullMap:
         # scrolling / zooming: center None = follow you; span None = default zoom
         self.center, self.span, self.view_cid = None, None, None
         self.last_view, self.last_px_per_m = None, None
+        self.clickable = None        # what the last frame drew, for click to go (see pick_at)
 
     # --- scrolling and zooming (mouse drag / wheel, arrows, +/-, Home) ---------------------------
     def reset_view(self):
@@ -79,6 +81,27 @@ class FullMap:
             return
         self.span = cur[1] / ZOOM_STEP ** steps
 
+    # --- click to go ----------------------------------------------------------------------------
+    def pick_at(self, fx, fy):
+        """Destination under frame pixel (fx, fy) of the last frame: the nearest marker (building
+        or map pin) within HIT_RADIUS, else that spot of the area under the click. None if the
+        click was off the map."""
+        c = self.clickable
+        if c is None:
+            return None
+        box = c["box"]
+        if not (box[0] <= fx <= box[2] and box[1] <= fy <= box[3]):
+            return None
+        near = [(math.hypot(px - fx, py - fy), dest) for px, py, dest in c["hits"]]
+        near = [n for n in near if n[0] <= HIT_RADIUS]
+        if near:
+            return dict(min(near, key=lambda n: n[0])[1])
+        area, x, y = c["spot"](fx, fy)
+        if area is None:
+            return None
+        return {"kind": "spot", "area": area, "name": f"Spot in {worldmap.short_name(self.store.area_name(area))}",
+                "x": round(x, 1), "y": round(y, 1)}
+
     def version(self):
         """Changes whenever the recorder (another process) adds areas, adds or distrusts links,
         or saves / replaces an area map."""
@@ -115,10 +138,13 @@ class FullMap:
             view = self._view(cid, here, (box[2] - box[0]) / (box[3] - box[1]))
             self.last_view = view
             self.last_px_per_m = min((box[2] - box[0]) / (view[2] - view[0]), (box[3] - box[1]) / (view[3] - view[1]))
+            hits = []
             src, P = worldmap.render_view(self.world, self.store, self.maps, cid, view,
                                           box[2] - box[0], box[3] - box[1],
-                                          pin_labels=self.pin_labels)
+                                          pin_labels=self.pin_labels, hits=hits)
             img.alpha_composite(src, (box[0], box[1]))
+            self.clickable = {"box": box, "hits": [(box[0] + px, box[1] + py, dest) for px, py, dest in hits],
+                              "spot": self._world_spot(cid, P, box)}
             to_px = lambda x, y: (box[0] + x, box[1] + y)       # noqa: E731
             me = to_px(*P(*here))
             route = self._route_points(snap, nav, P, to_px)
@@ -150,7 +176,7 @@ class FullMap:
         _text(d, (W - PAD, 18), where[:90], 9, DIM, anchor="ra")
         if g:
             _text(d, (PAD, H - 12), f"To {g.dest_name}: {g.line1}"[:140], 9, FG, anchor="ls")
-        hint = "drag / arrows scroll    wheel / +- zoom    " if home is not None else ""
+        hint = "click  go there    " + ("drag / arrows scroll    wheel / +- zoom    " if home is not None else "")
         _text(d, (W - PAD, H - 12), f"{hint}{KEYTEXT['labels']}  pin names {'off' if self.pin_labels else 'on'}"
                                     f"    Esc  close", 9, DIM, anchor="rs")
         if toast:
@@ -184,6 +210,21 @@ class FullMap:
             self.center = (cx, cy)                        # stop at the map's edges
         return (cx - vw / 2, cy - vh / 2, cx + vw / 2, cy + vh / 2)
 
+    def _world_spot(self, cid, P, box):
+        """frame pixel -> (area, x, y in that area) on the world map, (None, ...) off every area."""
+        (ax, ay), (bx, _) = P(0, 0), P(1, 1)
+        ppm = bx - ax                                   # P is x -> ax + x * ppm, y -> ay - y * ppm
+        world = self.world
+
+        def spot(fx, fy):
+            wx, wy = (fx - box[0] - ax) / ppm, (ay - (fy - box[1])) / ppm
+            area = worldmap.area_at(world, cid, wx, wy)
+            if area is None:
+                return None, None, None
+            ox, oy = world.origin[area]
+            return area, wx - ox, wy - oy
+        return spot
+
     @staticmethod
     def _fit(img, src, box):
         """Paste `src` scaled to fit `box`; return a function mapping src pixels -> img pixels."""
@@ -192,7 +233,11 @@ class FullMap:
         sw, sh = max(1, int(src.width * s)), max(1, int(src.height * s))
         ox, oy = box[0] + (bw - sw) // 2, box[1] + (bh - sh) // 2
         img.alpha_composite(src.resize((sw, sh), Image.LANCZOS), (ox, oy))
-        return lambda x, y: (ox + x * s, oy + y * s)
+
+        def to_px(x, y):
+            return ox + x * s, oy + y * s
+        to_px.back = lambda px, py: ((px - ox) / s, (py - oy) / s)
+        return to_px
 
     def _route_points(self, snap, nav, P, to_px):
         if not nav or not nav.plan:
@@ -219,6 +264,7 @@ class FullMap:
         to_px = self._fit(img, src, box)
         d = ImageDraw.Draw(img)
         pois = self.store.area_pois(snap.area)
+        hits = []
         for p in display_pois(pois):
             if p["kind"] != "pin":
                 continue
@@ -226,4 +272,13 @@ class FullMap:
             d.ellipse((x - 5, y - 5, x + 5, y + 5), fill=GOLD, outline=(0, 0, 0, 255))
             if self.pin_labels:
                 _text(d, (x + 8, y), (p["name"] or "")[:30], 8, GOLD, anchor="lm")
+            if p["name"]:
+                hits.append((x, y, {"kind": "pin", "area": snap.area, "name": p["name"], "x": p["x"], "y": p["y"]}))
+        area = snap.area
+
+        def spot(fx, fy):
+            sx, sy = to_px.back(fx, fy)
+            x, y = sx / ppx, h_m - sy / ppx
+            return (area, x, y) if 0 <= x <= w_m and 0 <= y <= h_m else (None, None, None)
+        self.clickable = {"box": box, "hits": hits, "spot": spot}
         return to_px(snap.pos[0] * ppx, (h_m - snap.pos[1]) * ppx)

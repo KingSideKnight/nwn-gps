@@ -6,7 +6,7 @@ In the game:
   Ctrl+Shift+F   destination picker (type to search, Up/Down, Enter, Esc)
   Ctrl+Shift+X   clear the destination (it also clears itself 10 s after you arrive)
   Ctrl+Shift+G   show / hide the panel
-  Ctrl+Shift+M   full-screen world map (press again to close)
+  Ctrl+Shift+M   full-screen world map (press again or Esc to close; click a place to go there)
   Ctrl+Shift+E   export your map to Documents\\NWN GPS\\Exports (to share)
   Ctrl+Shift+I   import friends' maps from Documents\\NWN GPS\\Inbox (backs yours up first)
   Ctrl+Shift + drag the panel with the left mouse button to move it (position is saved)
@@ -37,12 +37,14 @@ from .hud import read_target, resolve_target, set_target
 from .memory import k32, modules
 from .nav import Navigator
 from .fullmap import FullMap, frame_size
-from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_LABELS, EV_MAPKEY, EV_MOVED,
-                     EV_OPEN, EV_TOGGLE, Picker)
+from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_LABELS, EV_MAPCLICK,
+                     EV_MAPKEY, EV_MOVED, EV_OPEN, EV_TOGGLE, Picker, remember)
 from . import share
 
 TOAST_SECONDS = 8.0
 INBOX_CHECK_EVERY = 10.0
+UPDATE_LOOK_EVERY = 60.0     # seconds between looks at update.json until we've told you once
+SETTINGS_LOOK_EVERY = 2.0    # seconds between looks at settings.json's modification time
 
 POIS_CHECK_EVERY = 1.0   # seconds between checks for pins / doors the recorder just saved
 AUTO_CLEAR_AFTER = 3.5    # seconds standing at the destination before it clears itself
@@ -292,6 +294,9 @@ class InGame:
         self.inbox_n, self.inbox_checked = 0, 0.0
         self.jobs = share.Jobs(self.store.world, self.notify)
         share.ensure_folders()
+        from . import config
+        self.settings, self.settings_mtime, self.settings_looked = config.load_settings(), None, 0.0
+        self.update_told, self.update_looked = False, 0.0
         self.load_hotkeys()
         self.pub_lock, self.stopping = threading.Lock(), False
         threading.Thread(target=self.heartbeat, name="heartbeat", daemon=True).start()
@@ -331,6 +336,37 @@ class InGame:
         self.shm.m[hotkeys.TABLE_OFFSET:hotkeys.TABLE_OFFSET + len(table)] = table
         panel.set_legend(hotkeys.legend_rows(hk), {a: v[2] for a, v in hk.items()})
         self.hotkey_text = ", ".join(f"{v[2]} {hotkeys.LABELS[a].lower()}" for a, v in hk.items())
+
+    def tell_update(self):
+        """Once per session: a newer release is out (the launcher's daily check wrote update.json)."""
+        if self.update_told or time.time() - self.update_looked < UPDATE_LOOK_EVERY:
+            return
+        self.update_looked = time.time()
+        from . import updates
+        found = updates.available() if self.settings.get("check_updates", True) else None
+        if found:
+            self.update_told = True
+            self.notify(f"NWN GPS {found[0]} is available - the NWN GPS window has the link", "info")
+
+    def settings_changed(self):
+        """Settings saved (Settings window or by hand) while running: apply the hotkeys now."""
+        from . import config
+        if time.time() - self.settings_looked < SETTINGS_LOOK_EVERY:
+            return
+        self.settings_looked = time.time()
+        try:
+            mtime = config.SETTINGS_FILE.stat().st_mtime
+        except OSError:
+            return
+        if mtime == self.settings_mtime:
+            return
+        old_keys = self.settings["hotkeys"]
+        self.settings_mtime, self.settings = mtime, config.load_settings()
+        if self.settings["hotkeys"] != old_keys:     # (the game folder being remembered also saves the file)
+            self.load_hotkeys()
+            self.last_key = None                      # redraw the legend
+            log("settings changed: hotkeys reloaded")
+            self.notify("Settings saved - new keys are active", "ok")
 
     def notify(self, text, kind="info"):
         """On-screen message in the panel (called from background jobs too)."""
@@ -395,6 +431,19 @@ class InGame:
         if wheel:
             self.fullmap_r.zoom(wheel / 120)
 
+    def map_click(self, sx, sy):
+        """A click on the full map: go to the marker or spot under it (window pixels -> frame pixels)."""
+        vw, vh = self.shm.u32(O_VIEW_W), self.shm.u32(O_VIEW_H)
+        fw, fh = frame_size(vw, vh)
+        pick = self.fullmap_r.pick_at(sx * fw / (vw or fw), sy * fh / (vh or fh))
+        if pick is None:
+            log(f"map click at {sx},{sy}: nothing there")
+            return
+        remember(pick)
+        set_target(None, pick=pick)
+        log(f"map click: destination {pick['name']} ({pick['kind']} in {pick['area']})")
+        self.notify(f"Destination: {pick['name']}", "ok")
+
     def handle_events(self):
         for t, code, _mods in self.shm.events():
             if t == EV_TOGGLE:
@@ -424,6 +473,8 @@ class InGame:
                     self.fullmap_r.pan(*PAN_KEYS[code])
                 elif code in ZOOM_IN_KEYS + ZOOM_OUT_KEYS:
                     self.fullmap_r.zoom(1 if code in ZOOM_IN_KEYS else -1)
+            elif t == EV_MAPCLICK and self.fullmap and self.fullmap_r:
+                self.map_click(code & 0xFFFF, code >> 16)
             elif t == EV_LABELS:
                 self.pin_labels = not self.pin_labels
                 if self.fullmap_r:
@@ -549,6 +600,9 @@ class InGame:
         self.auto_clear(g)
         if time.time() - self.inbox_checked > INBOX_CHECK_EVERY:
             self.inbox_n, self.inbox_checked = len(share.inbox_files()), time.time()
+        self.settings_changed()
+        if snap.state == IN_GAME:
+            self.tell_update()
         toast = self.current_toast()
         full = self.fullmap and not self.picker.open and snap.state == IN_GAME
         # The recorder saves a new area / link / area map a moment after you arrive: redraw then.

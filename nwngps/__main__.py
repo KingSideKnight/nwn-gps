@@ -3,13 +3,15 @@
   NWN-GPS                    start everything (recorder + in-game GPS)
   NWN-GPS recorder           only record the map
   NWN-GPS ingame [dest]      only the in-game panel
+  NWN-GPS settings           the Settings window (also: press S in the NWN GPS window)
   NWN-GPS cli <command> ...  search, routes, export/merge, world map (see `NWN-GPS cli`)
   NWN-GPS overlay | hud      desktop-window / RivaTuner alternatives to the in-game panel
 """
 import sys
 
 PARTS = {"recorder": "nwngps.recorder", "ingame": "nwngps.ingame", "cli": "nwngps.cli",
-         "overlay": "nwngps.overlay", "hud": "nwngps.hud", "launcher": "nwngps.launcher"}
+         "overlay": "nwngps.overlay", "hud": "nwngps.hud", "launcher": "nwngps.launcher",
+         "settings": "nwngps.settings_window"}
 
 
 def main():

@@ -29,6 +29,8 @@ NWN GPS doesn't need installing: it runs from its own folder.
    - **"Windows protected your PC"** (a blue box): NWN GPS isn't signed by a paid certificate,
      so Windows doesn't recognise it. Click **More info**, then **Run anyway**. You only see this
      the first time.
+   - **"Smart App Control blocked an app"**, with no Run anyway button: see
+     [Smart App Control](#smart-app-control) below.
    - The first time, a black window shows a short notice. Read it, type `YES` and press Enter.
 4. **Start Neverwinter Nights normally** (not "Run as administrator") and join a server.
    You can start NWN GPS before or after the game.
@@ -52,6 +54,45 @@ load the in-game panel", add the NWN GPS folder as an exclusion. In Windows Secu
 **Virus & threat protection > Manage settings > Exclusions > Add or remove exclusions > Add an
 exclusion > Folder**. Then extract the zip again.
 
+### Smart App Control
+Smart App Control is a Windows 11 protection that only lets programs run if Microsoft already
+knows them or they're signed with a code-signing certificate. Windows turns it on by itself on
+new PCs and fresh installs, so you may have it without ever choosing it. Unlike the blue
+SmartScreen box, it has no **Run anyway** button.
+
+**Why it blocks NWN GPS, plainly:**
+- **NWN GPS isn't signed.** Signing means buying a certificate, or using Microsoft's paid signing
+  service, after an identity check. This is a free, one-person fan project, and it isn't signed
+  yet. We'd like to sign future releases, but there's no date.
+- **What it does looks risky to security tools.** It reads another program's memory and loads an
+  add-on into it, which is exactly what cheats and some malware do too. NWN GPS only does this to
+  the game, only to read your position and draw its panel, and the source code is public so
+  anyone can check. Windows can't know that, and it's right to be careful.
+
+Nothing NWN GPS can do from its side gets past Smart App Control, and we won't pretend otherwise.
+
+**Check whether it's on:** Windows Security > **App & browser control** > **Smart App Control
+settings**. It says **On**, **Evaluation** (Windows is watching and may switch it on later) or
+**Off**.
+
+**Your choices:**
+1. **Wait for a signed release.** The safest choice. Keep an eye on the
+   [Releases page](https://github.com/KingSideKnight/nwn-gps/releases); the notes will say when a
+   release is signed.
+2. **Turn Smart App Control off**, on that same settings page. Only do this if you're comfortable
+   with what it means:
+   - It stops protecting you from *all* unknown programs, not just NWN GPS. Windows Security's
+     antivirus keeps running.
+   - On many Windows 11 versions it **can't be turned back on** without resetting or
+     reinstalling Windows. Read what the settings page says before you switch.
+   - Only download NWN GPS from the Releases page above, and check that your zip is the real one
+     (below).
+
+**Check your download is the real one.** Each release lists the zip's SHA-256 fingerprint. In
+the folder with the zip, right-click empty space, choose **Open in Terminal**, and run
+`Get-FileHash NWN-GPS-<version>.zip` (with your version). The long code it prints must match the
+one on the Releases page exactly. If it doesn't, delete the file and don't run it.
+
 ## Upgrading
 1. Close NWN GPS. The game can keep running.
 2. Download and extract the new zip as above, and replace the old NWN GPS folder (or delete the
@@ -67,7 +108,7 @@ upgrading keeps them.
 |---|---|
 | **Ctrl+Shift+F** | Choose a destination: type to search places, ↑/↓ to pick, Enter to go, Esc to cancel |
 | **Ctrl+Shift+X** | Clear the destination (it also clears itself a few seconds after you arrive) |
-| **Ctrl+Shift+M** | Full-screen world map (press again, or **Esc**, to close). Drag it or use the arrow keys to look around, mouse wheel or **+ / -** to zoom, **Home** to jump back to you |
+| **Ctrl+Shift+M** | Full-screen world map (press again, or **Esc**, to close). **Click** a building, a map pin or any spot to go there. Drag it or use the arrow keys to look around, mouse wheel or **+ / -** to zoom, **Home** to jump back to you |
 | **Ctrl+Shift+L** | Pin names on the full-screen map on / off (the dots stay; it remembers your choice) |
 | **Ctrl+Shift+G** | Hide / show the panel |
 | **Ctrl+Shift+E** | Export your map to share with friends |
@@ -75,13 +116,21 @@ upgrading keeps them.
 | **Ctrl+Shift + drag** | Move the panel (it remembers where you put it) |
 
 The panel always shows these keys at the bottom (the full-screen map shows its own), so you don't
-need to memorise them.
+need to memorise them. To change them, press S in the NWN GPS window (see [Settings](#settings)).
+
+**Click to go:** on the full-screen map, a click on a building's square or a map pin's dot makes it
+your destination; a click anywhere else in an area sends you to that spot. The route appears on
+the map straight away, and the panel guides you as usual. A click that turns into a drag just
+moves the map.
 
 ## How mapping works
 - The map grows as you explore. Every area you enter is recorded with its map pins, doors and
   the exits you use. Routes are built from the exits people have actually walked.
 - An area's picture appears after you've been in it once with the GPS running.
 - Outdoor areas are joined into a world map automatically; buildings appear as markers at their doors.
+  Game worlds don't always fit on flat paper, so when two areas would land on top of each other,
+  one of them (with everything beyond it) is moved aside and a **dashed white line** joins the exit
+  to where it comes out.
 - Servers that are split into several linked servers (like Arelith) share one map. Travel between
   them is learned the first time you use a portal (and confirmed the second time).
 
@@ -145,7 +194,18 @@ back by hand.
   map are only as good as that map: **only import maps from people you trust.** See `SECURITY.md`.
 
 ## Settings
-`Documents\NWN GPS\settings.json` (created on first run). Close NWN GPS before editing.
+**Press S in the NWN GPS window** to open the Settings window (or run `NWN-GPS.exe settings`,
+which works while NWN GPS isn't running too). There you can:
+- **Change the keys:** click a key, then press the new combination. Esc cancels; **Reset keys
+  to defaults** puts them all back. New keys work in the game a few seconds after you save.
+- **Mapping:** death areas and DM mode (below).
+- **Folders:** the game folder and NWN user folder, if they weren't found by themselves. These
+  apply the next time you start NWN GPS.
+- **Updates:** turn the daily update check on or off, or **Check now** (see
+  [Updates](#updates)).
+
+Everything is saved in `Documents\NWN GPS\settings.json`, which you can also edit by hand (close
+NWN GPS first):
 - `"hotkeys"`: change any key, e.g. `"map": "Alt+M"`. Use Ctrl, Shift and/or Alt plus A–Z, 0–9 or F1–F12.
   Invalid or duplicate keys fall back to the defaults (the NWN GPS window tells you).
 - `"game_dir"`: only needed if the game isn't found automatically
@@ -156,6 +216,18 @@ back by hand.
   `["fugue", "afterlife"]`.
 - `"dm_mode"`: `true` records no links between areas (for the DM client, experimental, untested).
   The recorder picks this up at the next area change, no restart needed.
+- `"check_updates"`: `false` turns off the daily update check.
+
+## Updates
+Once a day, when it starts, NWN GPS asks GitHub (where it's published) whether a newer version is
+out. If there is one, the NWN GPS window shows the version and its download link, and the panel
+mentions it once in the game.
+- **What's sent:** one request to `api.github.com` for the list of NWN GPS releases. GitHub sees
+  your IP address and that the request comes from NWN GPS (and which version). Nothing about you,
+  your character, your game or your maps is sent.
+- **Nothing is downloaded or installed.** To update, download the new zip yourself; see
+  [Upgrading](#upgrading).
+- **To turn it off:** untick it in Settings, or set `"check_updates": false` in `settings.json`.
 
 ## Troubleshooting
 - **No panel in the game.** Make sure the game isn't running as administrator. If the window says
@@ -163,6 +235,8 @@ back by hand.
   [Antivirus](#antivirus), or use the desktop alternatives below.
 - **Windows says "Windows protected your PC".** Click **More info**, then **Run anyway**
   (see [Install](#install)).
+- **"Smart App Control blocked an app"** and there's no Run anyway. See
+  [Smart App Control](#smart-app-control): it's because NWN GPS isn't signed yet.
 - **Nothing happens when I double-click `NWN-GPS.exe`**, or it says files are missing. Make sure
   you extracted the whole zip (right-click, **Extract All...**) and didn't run it from inside the
   zip. If files vanished from the folder, your antivirus removed them: see [Antivirus](#antivirus).
@@ -183,7 +257,8 @@ back by hand.
 ## Your data
 - Maps: `Documents\NWN GPS\data\<world>.sqlite`, with automatic backups in `data\backups\` before
   imports, restores, forgotten links and noticed layout changes.
-- Nothing is uploaded anywhere. Sharing only happens when you send an exported file yourself.
+- Nothing is uploaded anywhere. Sharing only happens when you send an exported file yourself. The
+  only thing NWN GPS asks the internet is the daily update check (see [Updates](#updates)).
 - To remove NWN GPS: delete its folder and `Documents\NWN GPS`.
 
 ## License

@@ -19,7 +19,14 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
   `GDI32!SwapBuffers` in nwmain's import table, draws a texture Python publishes through shared
   memory, reads hotkeys via a window subclass, and unhooks/unloads on request. No game files change.
 - **Maps:** tile layouts from memory + tileset art from NWSync / texture packs / KEY-BIF
-  (`resources.py`, `maps.py`, `worldmap.py`).
+  (`resources.py`, `maps.py`, `worldmap.py`). Areas that land on top of each other are slid
+  along their shared edge, else the smallest branch hanging off one join is moved clear and that
+  join is drawn as a dashed line (`_settle` / `_separate`; `tests/test_worldmap_overlap.py` checks
+  random worlds never overlap). Clicks on the full map arrive as `EV_MAPCLICK`
+  events and are hit-tested against what the last frame drew (`FullMap.pick_at`).
+- **Settings and updates:** `settings_window.py` (tkinter; S in the launcher window) writes
+  settings.json, which the in-game part re-reads live. `updates.py` is the only network code: a
+  daily GitHub release check, opt-out, never downloads.
 
 ## Run from source
     native\build.cmd                  # once (Visual Studio 2022 C++ tools)

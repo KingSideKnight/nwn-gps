@@ -66,6 +66,8 @@ DEFAULTS = {
     # Experimental, untested: for the DM client (or anyone being moved around by scripts).
     # Records areas, map pins, doors and tile maps but no links between areas.
     "dm_mode": False,
+    # Once a day, ask GitHub whether a newer NWN GPS release exists (nothing is downloaded).
+    "check_updates": True,
 }
 
 
