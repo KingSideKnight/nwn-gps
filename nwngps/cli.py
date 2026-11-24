@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from . import route as R
-from .db import Store
+from .db import Store, file_world, open_untrusted
 
 
 def direction(dx, dy):
@@ -230,6 +230,16 @@ def main():
             other = args[0]
             if Path(other).resolve() == store.path.resolve():
                 sys.exit("that's your own database")
+            try:
+                con = open_untrusted(other)
+                theirs = file_world(con, other)
+                con.close()
+            except ValueError as e:
+                sys.exit(str(e))
+            mine = store.my_world()
+            if theirs and mine and theirs != mine.lower():
+                sys.exit(f"{Path(other).name} is a map of another server ({theirs}); yours is {mine}. "
+                         f"Use --world {theirs} to merge into that server's map instead.")
             if "--dry-run" in args:
                 import tempfile
                 tmp = Path(tempfile.mkdtemp()) / "preview.sqlite"

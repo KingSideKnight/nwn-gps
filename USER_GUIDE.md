@@ -9,13 +9,58 @@ an in-game panel: arrow, distance, next step, and a live map of the area. Works 
 > characters. **Some servers restrict third-party tools that read or modify the game client:
 > check your server's rules before using it.** You use it at your own risk.
 
-## Install
-1. Unzip `NWN-GPS` anywhere you like (for example `C:\Games\NWN-GPS`). Not inside the game folder.
-2. Run **`NWN-GPS.exe`**. The first time, it shows a short notice; type `YES` to continue.
-3. Start Neverwinter Nights **normally** (not "Run as administrator") and join a server.
-   You can start the GPS before or after the game.
+## What you need
+- **Neverwinter Nights: Enhanced Edition** on Windows (Steam, GOG or Beamdog), game build
+  **8193.37-17**. You can see your build in the game's main menu, bottom corner.
+- When the game updates, NWN GPS may stop working until it gets an update too. It tells you so
+  ("This game version isn't supported yet") and doesn't touch the game; your maps are kept.
 
-Leave the small NWN GPS window open while you play. Close it (or press Ctrl+C in it) to stop.
+## Install
+NWN GPS doesn't need installing: it runs from its own folder.
+
+1. **Download.** Open the
+   [Releases page](https://github.com/KingSideKnight/nwn-gps/releases), find the newest
+   version, open **Assets** and click **`NWN-GPS-<version>.zip`**. Don't pick "Source code":
+   that's for developers and has no program in it.
+2. **Extract.** In your Downloads folder, right-click the zip, choose **Extract All...**, pick a
+   folder (for example `C:\Games\NWN-GPS`) and click **Extract**. Running it straight from inside
+   the zip doesn't work. Don't put it inside the game folder.
+3. **Run `NWN-GPS.exe`** from the extracted folder.
+   - **"Windows protected your PC"** (a blue box): NWN GPS isn't signed by a paid certificate,
+     so Windows doesn't recognise it. Click **More info**, then **Run anyway**. You only see this
+     the first time.
+   - The first time, a black window shows a short notice. Read it, type `YES` and press Enter.
+4. **Start Neverwinter Nights normally** (not "Run as administrator") and join a server.
+   You can start NWN GPS before or after the game.
+
+Leave the NWN GPS window open while you play (you can minimise it). Close it, or press Ctrl+C in
+it, to stop. Tip: right-click `NWN-GPS.exe` and choose **Send to > Desktop (create shortcut)**
+for a desktop icon.
+
+### Is it working?
+- The NWN GPS window lists the game it found, where its logs go and your keys. It stays quiet
+  after that unless something goes wrong.
+- Once you're in an area in game, the **GPS panel** appears near the **bottom-right** corner,
+  above the compass: "NWN GPS", the area name and a small map. Ctrl+Shift + drag moves it.
+- No panel after a minute? See [Troubleshooting](#troubleshooting).
+
+### Antivirus
+NWN GPS reads the game's memory and loads a small add-on into the game to draw its panel. Some
+antivirus programs treat that as suspicious and quarantine `NWN-GPS.exe` or the `.dll` next to
+it, even though it's harmless. If files disappear from the folder, or the window says "could not
+load the in-game panel", add the NWN GPS folder as an exclusion. In Windows Security:
+**Virus & threat protection > Manage settings > Exclusions > Add or remove exclusions > Add an
+exclusion > Folder**. Then extract the zip again.
+
+## Upgrading
+1. Close NWN GPS. The game can keep running.
+2. Download and extract the new zip as above, and replace the old NWN GPS folder (or delete the
+   old folder first).
+3. Run the new `NWN-GPS.exe`. If the game is already running, it swaps in its new in-game add-on
+   by itself.
+
+Your maps, settings and shared files live in `Documents\NWN GPS`, not in the program folder, so
+upgrading keeps them.
 
 ## In the game
 | Keys | What it does |
@@ -92,6 +137,9 @@ back by hand.
 - **Ctrl+Shift+E** saves your map to `Documents\NWN GPS\Exports`. Send that `.sqlite` file to a friend.
 - Put files you receive into `Documents\NWN GPS\Inbox`, then press **Ctrl+Shift+I**.
   Your own map is backed up first; merged files move to `Inbox\merged`.
+- **Import while you're on the same server the map is from.** Each map file knows its server, and
+  a file from another server is not merged: it stays in the Inbox (the message names its server)
+  until you press Ctrl+Shift+I while playing there.
 - Exported maps don't include when you played (times and visit counts are removed).
 - Imported files are checked thoroughly and anything invalid is skipped, but routes from a friend's
   map are only as good as that map: **only import maps from people you trust.** See `SECURITY.md`.
@@ -111,8 +159,13 @@ back by hand.
 
 ## Troubleshooting
 - **No panel in the game.** Make sure the game isn't running as administrator. If the window says
-  "could not load the in-game panel", security software may be blocking it: allow the NWN GPS
-  folder, or use the desktop alternatives below.
+  "could not load the in-game panel", security software may be blocking it: see
+  [Antivirus](#antivirus), or use the desktop alternatives below.
+- **Windows says "Windows protected your PC".** Click **More info**, then **Run anyway**
+  (see [Install](#install)).
+- **Nothing happens when I double-click `NWN-GPS.exe`**, or it says files are missing. Make sure
+  you extracted the whole zip (right-click, **Extract All...**) and didn't run it from inside the
+  zip. If files vanished from the folder, your antivirus removed them: see [Antivirus](#antivirus).
 - **"This game version isn't supported yet."** A game update changed the parts NWN GPS reads.
   Nothing is loaded into the game in that case; wait for an NWN GPS update.
 - **Routes say "No known route yet".** Nobody has recorded a way there yet: explore, or import a

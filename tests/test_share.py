@@ -64,6 +64,54 @@ class ShareJobs(unittest.TestCase):
         self.wait()
         self.assertIn("Inbox", self.msgs[-1][1])
 
+    def friend_map(self, world, name):
+        """A friend's export of `world`'s map, saved into the Inbox as `name`."""
+        share.ensure_folders()
+        f = dbmod.Store(world)
+        f.upsert_area("z9", "Elsewhere", "t", 8, 8)
+        dest = share.INBOX / name
+        f.export(dest, share=True)
+        f.close()
+        return dest
+
+    def test_export_is_tagged_with_its_server(self):
+        self.jobs.export()
+        self.wait()
+        f = next(share.EXPORTS.glob("*.sqlite"))
+        con = dbmod.open_untrusted(f)
+        self.assertEqual(dbmod.file_world(con, "renamed.sqlite"), "w_test")
+        con.close()
+
+    def test_other_servers_map_is_left_in_the_inbox(self):
+        theirs = self.friend_map("other.server", "from-bob.sqlite")
+        self.jobs.import_inbox()
+        self.wait()
+        kind, text = self.msgs[-1]
+        self.assertEqual(kind, "warn")
+        self.assertIn("from-bob.sqlite (other_server)", text)
+        self.assertTrue(theirs.exists())                              # kept for when you're on that server
+        s = dbmod.Store("w.test")
+        self.assertIsNone(s.area("z9"))                               # nothing merged
+        s.close()
+
+    def test_same_servers_map_still_imports(self):
+        self.friend_map("w.test", "from-ann.sqlite")
+        self.jobs.import_inbox()
+        self.wait()
+        self.assertEqual(self.msgs[-1][0], "ok")
+        self.assertTrue((share.MERGED / "from-ann.sqlite").exists())
+
+    def test_old_untagged_export_is_judged_by_its_file_name(self):
+        p = self.friend_map("other.server", "x.sqlite")
+        con = sqlite3.connect(p)
+        con.execute("DROP TABLE meta")                                # as written by 0.1.4 and older
+        con.commit()
+        con.close()
+        p.rename(share.INBOX / "nwn-gps-other_server-2026-11-20_2130.sqlite")
+        self.jobs.import_inbox()
+        self.wait()
+        self.assertIn("Another server's map", self.msgs[-1][1])
+
 
 if __name__ == "__main__":
     unittest.main()

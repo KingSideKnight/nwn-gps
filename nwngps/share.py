@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from .db import Store
+from .db import OtherWorld, Store
 
 
 from .config import SHARE_DIR, documents_dir
@@ -80,12 +80,15 @@ class Jobs:
             self.notify(f"Merging {len(files)} map{'s' if len(files) > 1 else ''}...", "info")
             store = Store(self.world)
             total = {"areas": 0, "pois": 0, "transitions": 0, "tile_layouts": 0}
-            bad = []
+            bad, elsewhere = [], []
             try:
                 store.backup("before-import")
                 for f in files:
                     try:
                         added = store.merge(f)
+                    except OtherWorld as e:       # left in the Inbox for when you're on that server
+                        elsewhere.append(f"{f.name} ({e.world})")
+                        continue
                     except Exception:
                         bad.append(f.name)
                         continue
@@ -99,7 +102,9 @@ class Jobs:
                 store.close()
             msg = (f"Imported: +{total['areas']} areas, +{total['pois']} places, "
                    f"+{total['transitions']} routes, +{total['tile_layouts']} maps")
+            if elsewhere:
+                msg += f". Another server's map, not imported: {', '.join(elsewhere)[:80]}"
             if bad:
                 msg += f". Not a GPS map: {', '.join(bad)[:60]}"
-            self.notify(msg, "ok" if not bad else "warn")
+            self.notify(msg, "ok" if not (bad or elsewhere) else "warn")
         self._run("Import", fn)

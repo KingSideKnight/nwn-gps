@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS changes (
     data        TEXT,       -- layout: the previous area_tiles row as JSON
     undone      REAL
 );
+-- Which server ("world") this map belongs to, so a friend's file can't merge into another server's map.
+CREATE TABLE IF NOT EXISTS meta (
+    key         TEXT PRIMARY KEY,
+    value       TEXT
+);
 """
 
 # Columns added after the first schema; applied with ALTER TABLE when missing.
@@ -140,6 +145,32 @@ def open_untrusted(path):
         raise
     con.row_factory = sqlite3.Row
     return con
+
+
+EXPORT_NAME = re.compile(r"nwn-gps-(\w{1,100})-\d{4}-\d{2}-\d{2}_\d{4}")
+
+
+class OtherWorld(ValueError):
+    """A friend's map file belongs to another server than the map it would merge into."""
+
+    def __init__(self, name, world):
+        self.world = world
+        super().__init__(f"{name} is a map of another server ({world})")
+
+
+def file_world(con, path):
+    """Server a map file belongs to (db_name form), from its meta tag or, for files exported by
+    NWN GPS 0.1.4 and older (no tag), from the export file name. None if it can't tell."""
+    try:
+        kind = con.execute("SELECT type FROM sqlite_master WHERE name='meta'").fetchone()
+        if kind and kind[0] == "table":
+            r = con.execute("SELECT value FROM meta WHERE key='world' LIMIT 1").fetchone()
+            if r and isinstance(r[0], str) and re.fullmatch(r"\w{1,100}", r[0]):
+                return r[0].lower()
+    except sqlite3.DatabaseError:
+        pass
+    m = EXPORT_NAME.fullmatch(Path(path).stem)
+    return m.group(1).lower() if m else None
 
 
 def _text(v, limit):
@@ -293,7 +324,16 @@ class Store:
             for col, decl in cols.items():
                 if col not in have:
                     self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        if path is None and self.world != "unknown":       # a world's own map: tag it (exports copy the tag)
+            self.db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('world', ?)", (db_name(self.world),))
         self.db.commit()
+
+    def my_world(self):
+        """The server this map belongs to (db_name form), or None if unknown."""
+        r = self.db.execute("SELECT value FROM meta WHERE key='world'").fetchone()
+        if r and r[0]:
+            return r[0]
+        return db_name(self.world) if self.world != "unknown" else None
 
     @staticmethod
     def worlds():
@@ -650,11 +690,15 @@ class Store:
         read-only in SQLite's defensive mode, integrity-checked, size- and row-limited, and every
         value is validated (bad rows are skipped and counted as "rejected"). Areas fill in missing
         details, POIs and transitions are de-duplicated by distance, tile layouts are added where we
-        have none. Returns counts of what was added. (For a dry run, merge into an export() copy.)"""
+        have none. Returns counts of what was added. (For a dry run, merge into an export() copy.)
+        Raises OtherWorld, merging nothing, if the file is tagged as another server's map."""
         other = open_untrusted(other_path)
         added = {"areas": 0, "areas_updated": 0, "pois": 0, "transitions": 0, "transitions_seen_again": 0,
                  "tile_layouts": 0, "gone_skipped": 0, "rejected": 0}
         try:
+            theirs, mine = file_world(other, other_path), self.my_world()
+            if theirs and mine and theirs != mine.lower():
+                raise OtherWorld(Path(other_path).name, theirs)
             tables = {r[0] for r in other.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             for r in other.execute("SELECT * FROM areas LIMIT ?", (MAX_ROWS["areas"],)):
                 r = clean_area(dict(r))
