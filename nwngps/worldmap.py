@@ -8,6 +8,7 @@ geographically; they are attached as markers at their door in the parent area.
 
 World coordinates: metres, x east, y north. Each area has an origin (its SW corner).
 """
+import functools
 import math
 from collections import deque
 from dataclasses import dataclass, field
@@ -336,6 +337,45 @@ def covered(world, order, area, wx, wy):
     return False
 
 
+MARKER_MARGIN = 20        # pixels: markers this far outside the frame still draw (their edges show)
+PIN_SLACK = 10.0          # metres: how far outside its own area a pin may sit and still be looked at
+_COVER_CELL = 160.0       # metres: bucket size for the "is this point under a later area" index
+
+
+def _in_view(world, cid, P, out_w, out_h):
+    """For drawing markers into an out_w x out_h frame with world->pixel function P:
+    (areas of cluster `cid` that can have a marker on screen, in draw order;
+     on_top(area, wx, wy) -> same answer as covered() for any on-screen point).
+    Only areas overlapping the frame (plus MARKER_MARGIN) are looked at, so a frame costs what
+    is visible, not the size of the world (3,888 areas: covered() per pin took 7 s a frame)."""
+    (px0, py0), (px1, _) = P(0, 0), P(1, 1)
+    ppm = px1 - px0                              # P is x -> px0 + x * ppm, y -> py0 - y * ppm
+    m = MARKER_MARGIN
+    x0, x1 = (-m - px0) / ppm - PIN_SLACK, (out_w + m - px0) / ppm + PIN_SLACK
+    y0, y1 = (py0 - out_h - m) / ppm - PIN_SLACK, (py0 + m) / ppm + PIN_SLACK
+    order = draw_order(world, cid)
+    rank = {a: i for i, a in enumerate(order)}
+    shown, cells = [], {}
+    cell = lambda v: int(math.floor(v / _COVER_CELL))      # noqa: E731
+    for a in order:
+        (ax, ay), (w, h) = world.origin[a], world.size[a]
+        if ax > x1 or ax + w < x0 or ay > y1 or ay + h < y0:
+            continue
+        shown.append(a)
+        # an on-screen point under area a lies inside a's box, so a is found in the point's cell
+        for i in range(cell(ax), cell(ax + w) + 1):
+            for j in range(cell(ay), cell(ay + h) + 1):
+                cells.setdefault((i, j), []).append((rank[a], ax, ay, w, h))
+
+    def on_top(area, wx, wy):
+        r = rank.get(area)
+        if r is None:
+            return False
+        return any(rb > r and bx + 1 < wx < bx + bw - 1 and by + 1 < wy < by + bh - 1
+                   for rb, bx, by, bw, bh in cells.get((cell(wx), cell(wy)), ()))
+    return shown, on_top
+
+
 def area_at(world, cid, wx, wy):
     """The area of cluster `cid` drawn at world point (wx, wy) (the one on top), or None."""
     for a in reversed(draw_order(world, cid)):
@@ -360,7 +400,9 @@ def short_name(name):
     return name.split(") ")[-1] if ") " in name else name
 
 
+@functools.lru_cache(maxsize=None)
 def _font(size, bold=False):
+    """Loaded once per (size, bold): loading a TrueType file costs about a millisecond."""
     for name in (("segoeuib.ttf" if bold else "segoeui.ttf"), "arial.ttf"):
         try:
             return ImageFont.truetype(name, size)
@@ -438,17 +480,64 @@ GOLD = (242, 201, 76, 255)
 PIN_NEAR_DOOR = 8.0      # metres: a pin this close to a building marker is that marker's label
 
 
+class _Taken(list):
+    """Label boxes already drawn (a list), also bucketed by CELL pixel squares so a new label is
+    checked only against the boxes that share a square with it, not every label on the map."""
+    CELL = 64
+
+    def __init__(self, boxes=()):
+        super().__init__()
+        self.cells = {}
+        for b in boxes:
+            self.append(b)
+
+    def _span(self, b):
+        c = self.CELL
+        return [(i, j) for i in range(int(b[0] // c), int(b[2] // c) + 1)
+                for j in range(int(b[1] // c), int(b[3] // c) + 1)]
+
+    def append(self, b):
+        super().append(b)
+        for c in self._span(b):
+            self.cells.setdefault(c, []).append(b)
+
+    def near(self, box):
+        """Boxes that could overlap `box` (two overlapping boxes always share a square)."""
+        return (b for c in self._span(box) for b in self.cells.get(c, ()))
+
+
 def _label(d, x, y, text, taken, size=11):
-    """Outlined gold label to the right of (x, y), unless it would overlap one already drawn."""
+    """Outlined gold label to the right of (x, y), unless it would overlap one already drawn.
+    `taken`: the boxes drawn so far, a plain list or a _Taken (faster with many labels)."""
     f = _font(size)
     box = d.textbbox((x + 7, y), text, font=f, anchor="lm")
     box = (box[0] - 2, box[1] - 1, box[2] + 2, box[3] + 1)
-    if any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3] for b in taken):
+    near = taken.near(box) if isinstance(taken, _Taken) else taken
+    if any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3] for b in near):
         return
     taken.append(box)
-    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-        d.text((x + 7 + dx, y + dy), text, font=f, fill=(0, 0, 0, 255), anchor="lm")
-    d.text((x + 7, y), text, font=f, fill=GOLD, anchor="lm")
+    _outlined(d, (x + 7, y), text, f, "lm", ((-1, 0), (1, 0), (0, -1), (0, 1)), GOLD)
+
+
+def _outlined(d, xy, text, f, anchor, outline, fill):
+    """d.text in black at every `outline` offset, then in `fill` on top, with the glyphs
+    rasterised once instead of once per pass (most of a busy frame's time). The mask is drawn
+    shifted by whole pixels, so it is the same mask d.text would make, and pasting a colour
+    through it is what d.text does; near the top / left edge, where shifting could change the
+    sub-pixel phase, it just calls d.text."""
+    x, y = xy
+    img = getattr(d, "_image", None)
+    passes = [(dx, dy, (0, 0, 0, 255)) for dx, dy in outline] + [(0, 0, fill)]
+    if img is None or img.mode != "RGBA" or x - 2 < 0 or y - 2 < 0:
+        for dx, dy, color in passes:
+            d.text((x + dx, y + dy), text, font=f, fill=color, anchor=anchor)
+        return
+    b = d.textbbox(xy, text, font=f, anchor=anchor)
+    ix, iy = int(math.floor(b[0])) - 2, int(math.floor(b[1])) - 2
+    mask = Image.new("L", (int(math.ceil(b[2])) + 3 - ix, int(math.ceil(b[3])) + 3 - iy), 0)
+    ImageDraw.Draw(mask).text((x - ix, y - iy), text, font=f, fill=255, anchor=anchor)
+    for dx, dy, color in passes:
+        img.paste(color, (ix + dx, iy + dy), mask)
 
 
 def _markers(d, world, store, cid, P, out_w, out_h, names, pin_labels=True, hits=None):
@@ -456,38 +545,36 @@ def _markers(d, world, store, cid, P, out_w, out_h, names, pin_labels=True, hits
     Labels never overlap each other or the area names; dots are always drawn. pin_labels=False
     leaves out the pins' names (building names stay)."""
     from .panel import display_pois
-    taken = [d.textbbox((cx, ty), name, font=_font(14, True), anchor="mt") for cx, ty, name in names]
+    taken = _Taken(d.textbbox((cx, ty), name, font=_font(14, True), anchor="mt") for cx, ty, name in names)
     visible = lambda px, py: -20 <= px < out_w + 20 and -20 <= py < out_h + 20
-    order = draw_order(world, cid)
+    shown, on_top = _in_view(world, cid, P, out_w, out_h)
     doors, labelled = {}, set()
     for parent, x, y, inner in world.interiors:
         if world.cluster.get(parent) != cid or (parent, round(x), round(y)) in labelled:
             continue          # one label per door (deeper floors share their building's door)
         labelled.add((parent, round(x), round(y)))
         doors.setdefault(parent, []).append((x, y))
-        if covered(world, order, parent, *world.to_world(parent, x, y)):
-            continue          # under an area drawn on top: its markers would bleed through
         px, py = P(*world.to_world(parent, x, y))
         if not visible(px, py):
             continue
+        if on_top(parent, *world.to_world(parent, x, y)):
+            continue          # under an area drawn on top: its markers would bleed through
         d.rectangle((px - 4, py - 4, px + 4, py + 4), fill=GOLD, outline=(0, 0, 0, 255))
         _label(d, px, py, short_name(store.area_name(inner)), taken)
         if hits is not None:
             hits.append((px, py, {"kind": "area", "area": inner, "name": store.area_name(inner),
                                   "x": None, "y": None}))
-    for a, c in world.cluster.items():
-        if c != cid:
-            continue
+    for a in shown:           # draw order, so labels claim their space in the same order as before
         for p in display_pois(store.area_pois(a)):
             if p["kind"] != "pin" or not p["name"]:
                 continue
             if any(math.hypot(p["x"] - x, p["y"] - y) <= PIN_NEAR_DOOR for x, y in doors.get(a, ())):
                 continue      # the building marker there already says where it goes
             wx, wy = world.to_world(a, p["x"], p["y"])
-            if covered(world, order, a, wx, wy):
-                continue
             px, py = P(wx, wy)
             if not visible(px, py):
+                continue
+            if on_top(a, wx, wy):
                 continue
             d.ellipse((px - 4, py - 4, px + 4, py + 4), fill=GOLD, outline=(0, 0, 0, 255))
             if pin_labels:
@@ -541,9 +628,8 @@ def _place_names(d, names):
 def _names(d, names):
     f = _font(14, True)
     for cx, ty, name in names:
-        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)):
-            d.text((cx + dx, ty + dy), name, font=f, fill=(0, 0, 0, 255), anchor="mt")
-        d.text((cx, ty), name, font=f, fill=(232, 238, 242, 255), anchor="mt")
+        _outlined(d, (cx, ty), name, f, "mt", ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)),
+                  (232, 238, 242, 255))
 
 
 def render(world, store, maps, cid, ppm=1.6, margin=40):

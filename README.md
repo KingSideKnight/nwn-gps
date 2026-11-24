@@ -44,8 +44,9 @@ get AppData silently redirected to a private per-app copy. Data, logs and the DL
 invisible to the same tool started from Explorer, and to the game. `pip install --user` is affected
 the same way, so install Pillow system-wide or use the packaged exe.
 
-Scale (synthetic, `recon/scale_test.py`): 3,888 areas, 145,800 POIs, 9,558 transitions = 26 MB;
-search 4 ms, whole-world route 76 ms, full-screen map frame 73 ms.
+Scale (synthetic, `recon/scale_test.py 3888`): 5,125 areas (3,844 placed on one map, 1,281 interiors),
+192,200 POIs, 12,627 transitions = 35 MB; search 4 ms, whole-world route 155 ms, full-screen map
+frame 115 ms (the first one 525 ms: it also builds the world map and scales the visible tile art).
 
 ## Layout
 - `nwngps/` application (`__main__.py` entry point, `config.py` paths/settings)
