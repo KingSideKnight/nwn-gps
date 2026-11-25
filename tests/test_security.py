@@ -41,8 +41,8 @@ class HostileImports(unittest.TestCase):
         c.execute("INSERT INTO pois(area,kind,name,x,y,z) VALUES('ok_area','pin','Fine',5,5,0)")
         c.execute("INSERT INTO transitions(from_area,from_x,from_y,from_z,to_area,to_x,to_y,to_z) "
                   "VALUES('ok_area',?,5,0,'b',1,1,0)", (float("inf"),))
-        c.execute("INSERT INTO area_tiles VALUES('ok_area','tno01',64,64,?,0)", (json.dumps([[1, 0, 0]] * 5),))
-        c.execute("INSERT INTO area_tiles VALUES('big','tno01',1000,1000,'[]',0)")
+        c.execute("INSERT INTO area_tiles(resref,tileset,width,height,tiles,seen) VALUES('ok_area','tno01',64,64,?,0)", (json.dumps([[1, 0, 0]] * 5),))
+        c.execute("INSERT INTO area_tiles(resref,tileset,width,height,tiles,seen) VALUES('big','tno01',1000,1000,'[]',0)")
         c.commit()
         c.close()
         added = self.mine.merge(f)

@@ -37,12 +37,13 @@ class Merge(unittest.TestCase):
         added = m.merge(self.dir / "theirs.sqlite")
         self.assertEqual(added, {"areas": 1, "areas_updated": 1, "pois": 1, "transitions": 1,
                                  "transitions_seen_again": 1, "tile_layouts": 1, "gone_skipped": 0,
-                             "rejected": 0})
+                             "rejected": 0, "import_id": 1})
         self.assertEqual((m.area("a1")["width"], m.area("a1")["visits"]), (10, 1))   # filled, my visits kept
         self.assertEqual(m.stats(), {"areas": 3, "pois": 2, "transitions": 2})
         self.assertIsNotNone(m.tiles("a3"))
-        again = m.merge(self.dir / "theirs.sqlite")                          # idempotent
-        self.assertEqual((again["areas"], again["pois"], again["transitions"], again["tile_layouts"]), (0, 0, 0, 0))
+        with self.assertRaises(dbmod.AlreadyImported):                       # the same file twice
+            m.merge(self.dir / "theirs.sqlite")
+        self.assertEqual(m.stats(), {"areas": 3, "pois": 2, "transitions": 2})
 
     def test_export_and_backup_are_full_copies(self):
         self.mine.upsert_area("a1", "Market")

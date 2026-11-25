@@ -2,8 +2,11 @@
 
 Database file: <project>/data/<module>.sqlite (git-ignored; back it up by copying the file).
 """
+import hashlib
+import json
 import math
 import re
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -69,18 +72,42 @@ CREATE TABLE IF NOT EXISTS meta (
     key         TEXT PRIMARY KEY,
     value       TEXT
 );
+-- Friends' map files merged into this one (each can be undone; the same file is never merged twice).
+CREATE TABLE IF NOT EXISTS imports (
+    id          INTEGER PRIMARY KEY,
+    t           REAL,
+    file        TEXT,
+    sha256      TEXT,
+    source      TEXT,       -- the map it came from (its random map id), see Store.merge
+    added       TEXT,       -- JSON counts shown to the player
+    undone      REAL
+);
+-- Which map has vouched for which link: each map counts once per link, however often it's imported.
+CREATE TABLE IF NOT EXISTS sightings (
+    tid         INTEGER,
+    source      TEXT,
+    import_id   INTEGER,
+    prev_kind   TEXT,       -- the link before this import touched it (for undo)
+    prev_confirmed INTEGER,
+    PRIMARY KEY (tid, source)
+);
 """
 
 # Columns added after the first schema; applied with ALTER TABLE when missing.
+# import_id: the import (imports.id) that added the row; cleared once you see it yourself in game.
 MIGRATIONS = {
-    "areas": {"server": "TEXT"},
+    "areas": {"server": "TEXT", "import_id": "INTEGER"},
     "pois": {"missed": "INTEGER DEFAULT 0",            # visits in a row it wasn't there
-             "retired": "REAL"},                       # when it was hidden as gone (NULL = current)
+             "retired": "REAL",                        # when it was hidden as gone (NULL = current)
+             "import_id": "INTEGER"},
     "transitions": {"from_server": "TEXT", "to_server": "TEXT",
                     "kind": "TEXT DEFAULT 'walk'",       # walk | portal | jump | death | respawn (edges.py)
                     "confirmed": "INTEGER DEFAULT 1",    # 0 = not routed yet (see edges.py)
-                    "stale": "REAL"},                    # when it stopped being trusted (NULL = fine)
+                    "stale": "REAL",                     # when it stopped being trusted (NULL = fine)
+                    "import_id": "INTEGER"},
+    "area_tiles": {"import_id": "INTEGER"},
 }
+SOURCE_ID = re.compile(r"^[0-9a-f]{16}$")
 
 # Map changes (see Store.end_visit). Nothing is ever deleted: retired / stale rows are hidden and
 # come back by themselves when seen again (or with `nwngps changes` / `restore`).
@@ -150,6 +177,10 @@ def open_untrusted(path):
 EXPORT_NAME = re.compile(r"nwn-gps-(\w{1,100})-\d{4}-\d{2}-\d{2}_\d{4}")
 
 
+class AlreadyImported(ValueError):
+    """This exact file was merged before (and not undone)."""
+
+
 class OtherWorld(ValueError):
     """A friend's map file belongs to another server than the map it would merge into."""
 
@@ -171,6 +202,27 @@ def file_world(con, path):
         pass
     m = EXPORT_NAME.fullmatch(Path(path).stem)
     return m.group(1).lower() if m else None
+
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def file_source(con):
+    """The random map id a file carries (NWN GPS 0.1.6+), or None."""
+    try:
+        kind = con.execute("SELECT type FROM sqlite_master WHERE name='meta'").fetchone()
+        if kind and kind[0] == "table":
+            r = con.execute("SELECT value FROM meta WHERE key='source' LIMIT 1").fetchone()
+            if r and isinstance(r[0], str) and SOURCE_ID.match(r[0]):
+                return r[0]
+    except sqlite3.DatabaseError:
+        pass
+    return None
 
 
 def _text(v, limit):
@@ -326,7 +378,19 @@ class Store:
                     self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         if path is None and self.world != "unknown":       # a world's own map: tag it (exports copy the tag)
             self.db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('world', ?)", (db_name(self.world),))
+            # A random id for this map (nothing about you in it): lets a friend count your map once
+            # per link however many of your exports they import.
+            self.db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('source', ?)", (secrets.token_hex(8),))
         self.db.commit()
+        self._hold = False            # True while merging: one commit (or rollback) for the whole file
+
+    def _commit(self):
+        if not self._hold:
+            self.db.commit()
+
+    def my_source(self):
+        r = self.db.execute("SELECT value FROM meta WHERE key='source'").fetchone()
+        return r[0] if r else None
 
     def my_world(self):
         """The server this map belongs to (db_name form), or None if unknown."""
@@ -353,11 +417,11 @@ class Store:
                  name=COALESCE(excluded.name,name), tileset=COALESCE(excluded.tileset,tileset),
                  width=COALESCE(excluded.width,width), height=COALESCE(excluded.height,height),
                  server=COALESCE(excluded.server,server),
-                 last_seen=excluded.last_seen, visits=visits+?""",
+                 last_seen=excluded.last_seen, visits=visits+?, import_id=NULL""",
             (resref, name, tileset, width, height, now, now, int(visit), server, int(visit)))
-        self.db.commit()
+        self._commit()
 
-    def upsert_poi(self, area, kind, name, tag, x, y, z, live=True):
+    def upsert_poi(self, area, kind, name, tag, x, y, z, live=True, import_id=None):
         """live=False (merging someone else's map): an existing match is left exactly as it is, so
         an old copy can't bring back a pin / door you've seen the server remove."""
         now = time.time()
@@ -365,13 +429,14 @@ class Store:
                                  (area, kind, name, tag)).fetchall():
             if dist(r["x"], r["y"], x, y) < POI_MERGE_DIST:
                 if live:
-                    self.db.execute("UPDATE pois SET last_seen=?, missed=0, retired=NULL WHERE id=?", (now, r["id"]))
+                    self.db.execute("UPDATE pois SET last_seen=?, missed=0, retired=NULL, import_id=NULL WHERE id=?",
+                                    (now, r["id"]))
                     if r["retired"] is not None:
                         self.log_change(area, "poi_back", r["id"], f"{kind} {name or ''} is back")
                 return r["id"]
         cur = self.db.execute(
-            "INSERT INTO pois(area,kind,name,tag,x,y,z,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?)",
-            (area, kind, name, tag, x, y, z, now, now))
+            "INSERT INTO pois(area,kind,name,tag,x,y,z,first_seen,last_seen,import_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (area, kind, name, tag, x, y, z, now, now, import_id))
         return cur.lastrowid
 
     def log_change(self, area, what, ref=None, note="", data=None):
@@ -390,18 +455,25 @@ class Store:
         return best[1] if best else None
 
     def add_transition(self, from_area, fpos, to_area, tpos, from_server=None, to_server=None,
-                       kind="walk", confirmed=True, live=True):
+                       kind="walk", confirmed=True, live=True, source=None, import_id=None):
         """Record (or re-confirm) an edge. Seeing it again confirms it, except: a jump needs
         edges.JUMP_CONFIRM sightings, and a death edge is never confirmed. A jump seen again as a
         normal walk/portal (a door turned up there) becomes that kind. Walking a stale link again
         (live) makes it trusted again; a new link out of the same door makes older ones to other
-        places stale (the server re-pointed the door). live=False: merging someone else's map."""
+        places stale (the server re-pointed the door). live=False: merging someone else's map
+        (`source`, the map it came from, counts once per link; None = it can't count at all)."""
         now = time.time()
         for r in self.db.execute("SELECT * FROM transitions WHERE from_area=? AND to_area=?",
                                  (from_area, to_area)).fetchall():
             if dist(r["from_x"], r["from_y"], fpos[0], fpos[1]) < TRANS_MERGE_DIST:
                 if not live and r["stale"] is not None:
                     return r["id"], False
+                if not live:
+                    if source is None or self.db.execute("SELECT 1 FROM sightings WHERE tid=? AND source=?",
+                                                         (r["id"], source)).fetchone():
+                        return r["id"], False          # that map has vouched for this link already
+                    self.db.execute("INSERT INTO sightings(tid,source,import_id,prev_kind,prev_confirmed) "
+                                    "VALUES(?,?,?,?,?)", (r["id"], source, import_id, r["kind"], r["confirmed"]))
                 if r["stale"] is not None:
                     self.db.execute("UPDATE transitions SET stale=NULL WHERE id=?", (r["id"],))
                     self.log_change(from_area, "link_back", r["id"], "walked again: trusted again")
@@ -413,27 +485,34 @@ class Store:
                     ok = int(bool(r["confirmed"]) or (r["count"] or 1) + 1 >= E.JUMP_CONFIRM or bool(confirmed))
                 else:
                     ok = 1
-                self.db.execute("UPDATE transitions SET count=count+1, last_seen=?, confirmed=?, kind=? WHERE id=?",
-                                (now, ok, new_kind, r["id"]))
+                self.db.execute("UPDATE transitions SET count=count+1, confirmed=?, kind=? WHERE id=?",
+                                (ok, new_kind, r["id"]))
                 if live:      # where you arrive is where you arrive now (the far side may have moved)
-                    self.db.execute("UPDATE transitions SET to_x=?, to_y=?, to_z=? WHERE id=?", (*tpos, r["id"]))
+                    # (last_seen is only ever your own play: undoing an import relies on that)
+                    self.db.execute("UPDATE transitions SET to_x=?, to_y=?, to_z=?, last_seen=?, import_id=NULL "
+                                    "WHERE id=?", (*tpos, now, r["id"]))
                 if live and new_kind in E.REVERSIBLE:
                     self._supersede(r["id"], from_area, fpos, to_area)
-                self.db.commit()
+                self._commit()
                 return r["id"], False
+        if not live and source is None:
+            source = "unknown"
         via = self.nearest_poi(from_area, fpos[0], fpos[1])
         cur = self.db.execute(
             """INSERT INTO transitions(from_area,from_x,from_y,from_z,to_area,to_x,to_y,to_z,via_poi,first_seen,last_seen,
-                                       from_server,to_server,kind,confirmed)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (from_area, *fpos, to_area, *tpos, via["id"] if via else None, now, now,
-             from_server, to_server, kind, int(confirmed)))
+                                       from_server,to_server,kind,confirmed,import_id)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (from_area, *fpos, to_area, *tpos, via["id"] if via else None, now, now if live else None,
+             from_server, to_server, kind, int(confirmed), import_id))
+        if not live:
+            self.db.execute("INSERT INTO sightings(tid,source,import_id) VALUES(?,?,?)",
+                            (cur.lastrowid, source, import_id))
         if kind in E.REVERSIBLE and live:
             self._supersede(cur.lastrowid, from_area, fpos, to_area)
         elif kind in E.REVERSIBLE and self._exit_taken(cur.lastrowid, from_area, fpos, to_area):
             # someone else's link out of a door that (for you) leads elsewhere: yours wins
             self.mark_stale(cur.lastrowid, from_area, "imported; that exit leads elsewhere in your map")
-        self.db.commit()
+        self._commit()
         return cur.lastrowid, True
 
     def _same_exit(self, tid, from_area, fpos, to_area):
@@ -560,8 +639,8 @@ class Store:
 
     def links_version(self):
         """Changes whenever links are added, walked again, or stop / start being trusted."""
-        return tuple(self.db.execute("SELECT COUNT(*), MAX(last_seen), MAX(stale), SUM(stale IS NULL) "
-                                     "FROM transitions").fetchone())
+        return tuple(self.db.execute("SELECT COUNT(*), MAX(last_seen), MAX(stale), SUM(stale IS NULL), "
+                                     "SUM(confirmed), SUM(count), MAX(id) FROM transitions").fetchone())
 
     def promote_jumps(self, area):
         """Unconfirmed jumps out of `area` that turn out to start at a door / pin we know now
@@ -600,6 +679,7 @@ class Store:
             self.db.execute("UPDATE transitions SET confirmed=? WHERE id=?", (int(bool(confirmed)), tid))
             if confirmed:                 # trusting it by hand also overrides "the map changed"
                 self.db.execute("UPDATE transitions SET stale=NULL WHERE id=?", (tid,))
+        self.db.execute("UPDATE transitions SET import_id=NULL WHERE id=?", (tid,))   # yours now: undo keeps it
         self.db.commit()
         return True
 
@@ -615,11 +695,10 @@ class Store:
     def commit(self):
         self.db.commit()
 
-    def save_tiles(self, resref, tileset, w, h, tiles):
-        import json
-        self.db.execute("INSERT OR REPLACE INTO area_tiles(resref,tileset,width,height,tiles,seen) VALUES(?,?,?,?,?,?)",
-                        (resref, tileset, w, h, json.dumps(tiles), time.time()))
-        self.db.commit()
+    def save_tiles(self, resref, tileset, w, h, tiles, import_id=None):
+        self.db.execute("INSERT OR REPLACE INTO area_tiles(resref,tileset,width,height,tiles,seen,import_id) "
+                        "VALUES(?,?,?,?,?,?,?)", (resref, tileset, w, h, json.dumps(tiles), time.time(), import_id))
+        self._commit()
 
     def tiles(self, resref):
         import json
@@ -678,6 +757,10 @@ class Store:
                 out.execute("UPDATE transitions SET first_seen=NULL, last_seen=NULL")
                 out.execute("UPDATE area_tiles SET seen=NULL")
                 out.execute("DELETE FROM changes")              # your own play history
+                out.execute("DELETE FROM imports")              # whose maps you merged
+                out.execute("DELETE FROM sightings")
+                for table in ("areas", "pois", "transitions", "area_tiles"):
+                    out.execute(f"UPDATE {table} SET import_id=NULL")
             out.execute("VACUUM")             # don't leave the old values in free pages
         out.close()
         return dest
@@ -691,75 +774,157 @@ class Store:
         value is validated (bad rows are skipped and counted as "rejected"). Areas fill in missing
         details, POIs and transitions are de-duplicated by distance, tile layouts are added where we
         have none. Returns counts of what was added. (For a dry run, merge into an export() copy.)
-        Raises OtherWorld, merging nothing, if the file is tagged as another server's map."""
+        Raises OtherWorld, merging nothing, if the file is tagged as another server's map, and
+        AlreadyImported if this exact file was merged before (and that import wasn't undone).
+
+        All or nothing: the whole file is one transaction. Everything it adds is labelled with the
+        import, so `undo_import` can take it out again later. Each map (its random `source` id; for
+        older files without one, the file itself) counts as one sighting per link, however many of
+        its exports you import, so re-imports can't make an untrusted teleport routable."""
         other = open_untrusted(other_path)
         added = {"areas": 0, "areas_updated": 0, "pois": 0, "transitions": 0, "transitions_seen_again": 0,
                  "tile_layouts": 0, "gone_skipped": 0, "rejected": 0}
         try:
+            name = Path(other_path).name
             theirs, mine = file_world(other, other_path), self.my_world()
             if theirs and mine and theirs != mine.lower():
-                raise OtherWorld(Path(other_path).name, theirs)
-            tables = {r[0] for r in other.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            for r in other.execute("SELECT * FROM areas LIMIT ?", (MAX_ROWS["areas"],)):
-                r = clean_area(dict(r))
-                if r is None:
-                    added["rejected"] += 1
-                    continue
-                mine = self.area(r["resref"])
-                if mine is None:
-                    added["areas"] += 1
-                elif any(mine[k] is None and r[k] is not None for k in ("name", "tileset", "width", "height")):
-                    added["areas_updated"] += 1
-                self.db.execute(
-                    """INSERT INTO areas(resref,name,tileset,width,height,first_seen,last_seen,visits,server)
-                       VALUES(?,?,?,?,?,?,?,0,?)
-                       ON CONFLICT(resref) DO UPDATE SET
-                         name=COALESCE(name,excluded.name), tileset=COALESCE(tileset,excluded.tileset),
-                         width=COALESCE(width,excluded.width), height=COALESCE(height,excluded.height),
-                         server=COALESCE(server,excluded.server),
-                         first_seen=COALESCE(MIN(first_seen,excluded.first_seen),first_seen,excluded.first_seen)""",
-                    (r["resref"], r["name"], r["tileset"], r["width"], r["height"],
-                     r["first_seen"], r["first_seen"], r["server"]))
-            before = self.stats()["pois"]
-            # Their pins / doors / links the server has since removed (retired / stale in their copy)
-            # are skipped, and nothing of theirs brings back one you've seen go (live=False).
-            for r in other.execute("SELECT * FROM pois LIMIT ?", (MAX_ROWS["pois"],)):
-                if r.keys().count("retired") and r["retired"] is not None:
-                    added["gone_skipped"] += 1
-                    continue
-                r = clean_poi(dict(r))
-                if r is None:
-                    added["rejected"] += 1
-                    continue
-                self.upsert_poi(r["area"], r["kind"], r["name"], r["tag"], r["x"], r["y"], r["z"], live=False)
-            added["pois"] = self.stats()["pois"] - before
-            for r in other.execute("SELECT * FROM transitions LIMIT ?", (MAX_ROWS["transitions"],)):
-                if r.keys().count("stale") and r["stale"] is not None:
-                    added["gone_skipped"] += 1
-                    continue
-                r = clean_transition(dict(r))
-                if r is None:
-                    added["rejected"] += 1
-                    continue
-                _, new = self.add_transition(r["from_area"], (r["from_x"], r["from_y"], r["from_z"]),
-                                             r["to_area"], (r["to_x"], r["to_y"], r["to_z"]),
-                                             r["from_server"], r["to_server"], r["kind"], r["confirmed"],
-                                             live=False)
-                added["transitions" if new else "transitions_seen_again"] += 1
-            if "area_tiles" in tables:
-                for r in other.execute("SELECT resref, tileset, width, height, tiles FROM area_tiles LIMIT ?",
-                                       (MAX_ROWS["area_tiles"],)):
-                    t = clean_tiles(dict(r))
-                    if t is None:
-                        added["rejected"] += 1
-                        continue
-                    if not self.db.execute("SELECT 1 FROM area_tiles WHERE resref=?", (t["resref"],)).fetchone():
-                        self.save_tiles(t["resref"], t["tileset"], t["width"], t["height"], t["tiles"])
-                        added["tile_layouts"] += 1
+                raise OtherWorld(name, theirs)
+            sha = file_sha256(other_path)
+            prev = self.db.execute("SELECT id, t FROM imports WHERE sha256=? AND undone IS NULL", (sha,)).fetchone()
+            if prev:
+                raise AlreadyImported(f"{name} was already imported on {time.strftime('%Y-%m-%d', time.localtime(prev['t']))}")
+            source = file_source(other) or f"file-{sha[:16]}"
+            if source == self.my_source():
+                source = None                 # your own map coming back: adds what's missing, vouches for nothing
+            self._hold = True
+            iid = self.db.execute("INSERT INTO imports(t, file, sha256, source) VALUES(?,?,?,?)",
+                                  (time.time(), name[:200], sha, source)).lastrowid
+            self._merge_rows(other, added, iid, source)
+            self.db.execute("UPDATE imports SET added=? WHERE id=?", (json.dumps(added), iid))
             self.db.commit()
+            added["import_id"] = iid
+        except BaseException:
+            if self._hold:
+                self.db.rollback()
+            raise
         finally:
+            self._hold = False
             other.close()
         return added
+
+    def _merge_rows(self, other, added, iid, source):
+        tables = {r[0] for r in other.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for r in other.execute("SELECT * FROM areas LIMIT ?", (MAX_ROWS["areas"],)):
+            r = clean_area(dict(r))
+            if r is None:
+                added["rejected"] += 1
+                continue
+            mine = self.area(r["resref"])
+            if mine is None:
+                added["areas"] += 1
+            elif any(mine[k] is None and r[k] is not None for k in ("name", "tileset", "width", "height")):
+                added["areas_updated"] += 1
+            self.db.execute(
+                """INSERT INTO areas(resref,name,tileset,width,height,first_seen,last_seen,visits,server,import_id)
+                   VALUES(?,?,?,?,?,?,?,0,?,?)
+                   ON CONFLICT(resref) DO UPDATE SET
+                     name=COALESCE(name,excluded.name), tileset=COALESCE(tileset,excluded.tileset),
+                     width=COALESCE(width,excluded.width), height=COALESCE(height,excluded.height),
+                     server=COALESCE(server,excluded.server),
+                     first_seen=COALESCE(MIN(first_seen,excluded.first_seen),first_seen,excluded.first_seen)""",
+                (r["resref"], r["name"], r["tileset"], r["width"], r["height"],
+                 r["first_seen"], r["first_seen"], r["server"], iid))
+        before = self.stats()["pois"]
+        # Their pins / doors / links the server has since removed (retired / stale in their copy)
+        # are skipped, and nothing of theirs brings back one you've seen go (live=False).
+        for r in other.execute("SELECT * FROM pois LIMIT ?", (MAX_ROWS["pois"],)):
+            if r.keys().count("retired") and r["retired"] is not None:
+                added["gone_skipped"] += 1
+                continue
+            r = clean_poi(dict(r))
+            if r is None:
+                added["rejected"] += 1
+                continue
+            self.upsert_poi(r["area"], r["kind"], r["name"], r["tag"], r["x"], r["y"], r["z"], live=False,
+                            import_id=iid)
+        added["pois"] = self.stats()["pois"] - before
+        for r in other.execute("SELECT * FROM transitions LIMIT ?", (MAX_ROWS["transitions"],)):
+            if r.keys().count("stale") and r["stale"] is not None:
+                added["gone_skipped"] += 1
+                continue
+            r = clean_transition(dict(r))
+            if r is None:
+                added["rejected"] += 1
+                continue
+            _, new = self.add_transition(r["from_area"], (r["from_x"], r["from_y"], r["from_z"]),
+                                         r["to_area"], (r["to_x"], r["to_y"], r["to_z"]),
+                                         r["from_server"], r["to_server"], r["kind"], r["confirmed"],
+                                         live=False, source=source, import_id=iid)
+            added["transitions" if new else "transitions_seen_again"] += 1
+        if "area_tiles" in tables:
+            for r in other.execute("SELECT resref, tileset, width, height, tiles FROM area_tiles LIMIT ?",
+                                   (MAX_ROWS["area_tiles"],)):
+                t = clean_tiles(dict(r))
+                if t is None:
+                    added["rejected"] += 1
+                    continue
+                if not self.db.execute("SELECT 1 FROM area_tiles WHERE resref=?", (t["resref"],)).fetchone():
+                    self.save_tiles(t["resref"], t["tileset"], t["width"], t["height"], t["tiles"], import_id=iid)
+                    added["tile_layouts"] += 1
+
+    def imports(self):
+        """Merged map files, newest first."""
+        return self.db.execute("SELECT * FROM imports ORDER BY id DESC").fetchall()
+
+    def undo_import(self, iid):
+        """Take one imported file back out of your map (your map is backed up first). Removes what
+        it added, unless you've since seen it yourself in game, and takes back the sightings it
+        counted (links it made trusted go back to untrusted). Area details it filled into areas you
+        already had stay. Returns a summary dict, or None if there's no such import / it's undone."""
+        imp = self.db.execute("SELECT * FROM imports WHERE id=? AND undone IS NULL", (iid,)).fetchone()
+        if not imp:
+            return None
+        backup = self.backup("before-undo-import")
+        out = {"file": imp["file"], "backup": str(backup), "areas": 0, "pois": 0, "transitions": 0,
+               "tile_layouts": 0, "links_untrusted": 0}
+        self._hold = True
+        try:
+            q = self.db.execute
+            for s in q("SELECT s.*, t.import_id AS row_import, t.last_seen, t.kind, t.confirmed, t.count "
+                       "FROM sightings s JOIN transitions t ON t.id=s.tid WHERE s.import_id=?", (iid,)).fetchall():
+                if s["row_import"] == iid:
+                    continue                      # the link itself goes below
+                q("UPDATE transitions SET count=MAX(1, count-1) WHERE id=?", (s["tid"],))
+                # put it back as it was, unless you've walked it yourself since the import
+                if (s["last_seen"] is None or s["last_seen"] <= imp["t"]) and s["prev_kind"] is not None:
+                    if s["confirmed"] and not s["prev_confirmed"]:
+                        out["links_untrusted"] += 1
+                    q("UPDATE transitions SET kind=?, confirmed=? WHERE id=?",
+                      (s["prev_kind"], s["prev_confirmed"], s["tid"]))
+            q("DELETE FROM sightings WHERE import_id=?", (iid,))
+            gone = [r[0] for r in q("SELECT id FROM transitions WHERE import_id=?", (iid,))]
+            for tid in gone:
+                q("DELETE FROM sightings WHERE tid=?", (tid,))
+                q("DELETE FROM changes WHERE ref=? AND what IN ('link_stale','link_back')", (tid,))
+            out["transitions"] = q("DELETE FROM transitions WHERE import_id=?", (iid,)).rowcount
+            q("UPDATE transitions SET via_poi=NULL WHERE via_poi IN (SELECT id FROM pois WHERE import_id=?)", (iid,))
+            out["pois"] = q("DELETE FROM pois WHERE import_id=?", (iid,)).rowcount
+            out["tile_layouts"] = q("DELETE FROM area_tiles WHERE import_id=?", (iid,)).rowcount
+            # an area it added stays if something else still lives in it (another import, your own play)
+            out["areas"] = q("""DELETE FROM areas WHERE import_id=? AND
+                                  resref NOT IN (SELECT area FROM pois) AND
+                                  resref NOT IN (SELECT from_area FROM transitions) AND
+                                  resref NOT IN (SELECT to_area FROM transitions) AND
+                                  resref NOT IN (SELECT resref FROM area_tiles)""", (iid,)).rowcount
+            q("UPDATE areas SET import_id=NULL WHERE import_id=?", (iid,))
+            q("UPDATE imports SET undone=? WHERE id=?", (time.time(), iid))
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+        finally:
+            self._hold = False
+        return out
 
     def stats(self):
         q = lambda t: self.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]

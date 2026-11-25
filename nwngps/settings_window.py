@@ -63,6 +63,79 @@ def validate(values, base):
     return out, problems
 
 
+def imports_window(root):
+    """Friends' maps merged into yours, with Undo for each."""
+    import tkinter as tk
+    from tkinter import messagebox, ttk
+    from .cli import import_line
+    from .db import Store, latest_world
+    win = tk.Toplevel(root)
+    win.title("Imported maps")
+    win.transient(root)
+    frm = ttk.Frame(win, padding=16)
+    frm.grid(sticky="nsew")
+    latest = latest_world()
+    worlds = sorted((w for w in Store.worlds() if not w.endswith(("-share", "preview"))),
+                    key=lambda w: (w != latest, w))       # the server you played last first
+    if not worlds:
+        ttk.Label(frm, text="No maps recorded yet.").grid()
+        return
+    ttk.Label(frm, text="Friends' maps you've imported, newest first. Undo takes one back out of your map "
+                        "(anything you've since seen yourself in the game stays). Your map is backed up first.",
+              wraplength=560, foreground="#555").grid(row=0, column=0, columnspan=3, sticky="w")
+    world = tk.StringVar(value=worlds[0])
+    if len(worlds) > 1:
+        ttk.Label(frm, text="Server").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        box = ttk.Combobox(frm, textvariable=world, values=worlds, state="readonly", width=30)
+        box.grid(row=1, column=1, sticky="w", pady=(8, 0))
+        box.bind("<<ComboboxSelected>>", lambda e: fill())
+    lst = tk.Listbox(frm, width=90, height=12, activestyle="none")
+    lst.grid(row=2, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
+    note = ttk.Label(frm, text="", wraplength=560)
+    note.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    ids = []
+
+    def fill():
+        lst.delete(0, "end")
+        ids.clear()
+        st = Store(world.get())
+        try:
+            for r in st.imports():
+                ids.append((r["id"], r["file"], r["undone"]))
+                lst.insert("end", import_line(r))
+        finally:
+            st.close()
+        if not ids:
+            lst.insert("end", "No friends' maps imported yet.")
+
+    def undo():
+        sel = lst.curselection()
+        if not sel or sel[0] >= len(ids):
+            note.configure(text="Pick an import first.", foreground="#b00")
+            return
+        iid, name, undone = ids[sel[0]]
+        if undone:
+            note.configure(text="That one is undone already.", foreground="#b00")
+            return
+        if not messagebox.askyesno("Undo import", f"Take {name} back out of your map?", parent=win):
+            return
+        st = Store(world.get())
+        try:
+            out = st.undo_import(iid)
+        finally:
+            st.close()
+        note.configure(text=(f"Done: -{out['areas']} areas, -{out['pois']} places, -{out['transitions']} routes. "
+                             f"The file is still in Inbox\\merged if you want it back." if out
+                             else "Couldn't undo that one."), foreground="#070" if out else "#b00")
+        fill()
+
+    bar = ttk.Frame(frm)
+    bar.grid(row=4, column=0, columnspan=3, sticky="we", pady=(8, 0))
+    ttk.Button(bar, text="Undo selected import", command=undo).pack(side="left")
+    ttk.Button(bar, text="Close", command=win.destroy).pack(side="right")
+    fill()
+
+
 def main():
     import tkinter as tk
     from tkinter import filedialog, ttk
@@ -208,6 +281,7 @@ def main():
                               "the next time you start NWN GPS.", foreground="#070")
 
     ttk.Button(bar, text="Open NWN GPS folder", command=lambda: os.startfile(config.SHARE_DIR)).pack(side="left")
+    ttk.Button(bar, text="Imported maps...", command=lambda: imports_window(root)).pack(side="left", padx=(6, 0))
     ttk.Button(bar, text="Close", command=root.destroy).pack(side="right")
     ttk.Button(bar, text="Save", command=save).pack(side="right", padx=(0, 6))
     root.mainloop()

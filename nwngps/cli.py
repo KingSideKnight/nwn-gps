@@ -8,6 +8,8 @@
   python -m nwngps.cli worldmap [out.png]                 export the stitched world map
   python -m nwngps.cli export [file.sqlite]               copy of your map database to share
   python -m nwngps.cli merge <their.sqlite> [--dry-run]   merge a friend's database (backs yours up first)
+  python -m nwngps.cli imports                            friends' maps merged so far (id, file, what it added)
+  python -m nwngps.cli undo-import <id>                   take one of those out again (backs your map up first)
   python -m nwngps.cli links [area text]                  recorded links between areas (id, kind, trusted?)
   python -m nwngps.cli trust-link <id> | distrust-link <id>   use / stop using a link for directions
   python -m nwngps.cli forget-link <id>                   delete a wrong link (backs your map up first)
@@ -170,6 +172,36 @@ def cmd_restore(store, args):
           else f"change {args[0]} can't be undone (unknown, already undone, or nothing to undo)")
 
 
+def import_line(r):
+    """One imported file, for lists: 'id  date  file  +3 areas, +40 places, +12 routes'."""
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["t"])) if r["t"] else "?"
+    try:
+        a = json.loads(r["added"] or "{}")
+    except ValueError:
+        a = {}
+    what = f"+{a.get('areas', 0)} areas, +{a.get('pois', 0)} places, +{a.get('transitions', 0)} routes"
+    return f"{when}  {r['file']}  {what}" + ("  [undone]" if r["undone"] else "")
+
+
+def cmd_imports(store):
+    rows = store.imports()
+    for r in rows:
+        print(f"{r['id']:5}  {import_line(r)}")
+    print(f"{len(rows)} imports (newest first). Take one out with: undo-import <id>" if rows
+          else "No friends' maps imported yet.")
+
+
+def cmd_undo_import(store, args):
+    if not args or not args[0].isdigit():
+        sys.exit("usage: cli undo-import <id>   (ids are listed by `imports`)")
+    out = store.undo_import(int(args[0]))
+    if not out:
+        sys.exit(f"import {args[0]} can't be undone (unknown or already undone)")
+    print(f"took {out['file']} out of your map: -{out['areas']} areas, -{out['pois']} places, "
+          f"-{out['transitions']} routes, -{out['tile_layouts']} maps; {out['links_untrusted']} links "
+          f"untrusted again. Backup: {out['backup']}")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -203,6 +235,10 @@ def main():
             cmd_changes(store, args)
         elif cmd == "restore":
             cmd_restore(store, args)
+        elif cmd == "imports":
+            cmd_imports(store)
+        elif cmd == "undo-import":
+            cmd_undo_import(store, args)
         elif cmd == "worldmap":
             from . import maps as maps_mod, worldmap
             from .resources import Resources
@@ -247,6 +283,8 @@ def main():
                 preview = Store(path=tmp)
                 try:
                     print("dry run, nothing changed. Would add:", preview.merge(other))
+                except ValueError as e:
+                    sys.exit(str(e))
                 finally:
                     preview.close()
                     tmp.unlink(missing_ok=True)
@@ -254,9 +292,13 @@ def main():
                 b = store.backup("before-merge")
                 print(f"backup: {b}")
                 before = store.stats()
-                print("added:", store.merge(other))
+                try:
+                    added = store.merge(other)
+                except ValueError as e:
+                    sys.exit(str(e))
+                print("added:", added)
                 print(f"{before} -> {store.stats()}")
-                print(f"to undo: stop the GPS, then copy the backup over {store.path}")
+                print(f"to undo: undo-import {added['import_id']}")
         elif cmd == "go":
             from .hud import set_target
             if not args or args == ["--stop"]:
