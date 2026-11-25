@@ -25,7 +25,7 @@
 #include <string.h>
 
 /* ---- shared memory layout v2 (keep in sync with nwngps/ingame.py) ---- */
-#define DLL_VERSION 4u
+#define DLL_VERSION 5u
 #define SHM_NAME L"nwngps_overlay_v3"
 #define SHM_MAGIC 0x5350474Eu /* 'NGPS' */
 #define MAX_W 2048
@@ -86,6 +86,13 @@ typedef struct {
     /* full map open: running totals of mouse drag (pixels) and wheel (WHEEL_DELTA units); Python
        keeps the last values it saw, so nothing is lost however fast the mouse moves */
     volatile int32_t map_drag_x, map_drag_y, map_wheel;   /* at offset 1336 */
+    /* v5: dragging the mini map to look around. Totals since the press (pixels); dragging is 1
+       while the button is held. Python snaps the view back to you once it's 0. */
+    volatile int32_t panel_drag_x, panel_drag_y;          /* at offset 1348 */
+    volatile uint32_t panel_dragging;                     /* at offset 1356 */
+    /* where the mini map sits inside the panel image (x, y, w, h); Python writes it. w = 0: no
+       mini map to drag (old Python), so clicks on the panel go to the game as before */
+    volatile uint32_t map_rect[4];                        /* at offset 1360 */
 } ShmHeader;
 
 /* ---- GL constants / function pointers beyond GL 1.1 ---- */
@@ -436,8 +443,22 @@ static WPARAM g_swallow_up = 0;  /* eat the key-up of a key the full map took */
 static int g_mapdrag = 0, g_mapdrag_x = 0, g_mapdrag_y = 0;   /* dragging the full map */
 static int g_mapdown_x = 0, g_mapdown_y = 0, g_mapmoved = 0;  /* where the press was; moved too far to be a click */
 
+static int g_pandrag = 0, g_pandrag_x = 0, g_pandrag_y = 0;  /* dragging the mini map to look around */
+
 static int map_open(void) {
     return g_shm && (g_shm->flags & FLAG_FULLSCREEN) && !g_capturing;
+}
+
+/* Is window point (mx, my) on the mini map inside the panel as it was last drawn? */
+static int on_minimap(int mx, int my) {
+    uint32_t rx = g_shm->map_rect[0], ry = g_shm->map_rect[1], rw = g_shm->map_rect[2], rh = g_shm->map_rect[3];
+    if (!g_drawn || g_capturing || !rw || !rh || rx + rw > g_tex_w || ry + rh > g_tex_h) return 0;
+    return mx >= g_px + (int)rx && mx < g_px + (int)(rx + rw) && my >= g_py + (int)ry && my < g_py + (int)(ry + rh);
+}
+
+static void end_pan(void) {
+    g_pandrag = 0;
+    if (g_shm) g_shm->panel_dragging = 0;
 }
 
 static int map_key(WPARAM k) {
@@ -488,6 +509,17 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 SetCapture(h);
                 return 0;   /* the game never sees this click */
             }
+            if (!map_open() && on_minimap(mx, my)) {   /* look around on the mini map */
+                g_pandrag = 1;
+                g_pandrag_x = mx;
+                g_pandrag_y = my;
+                g_shm->panel_drag_x = 0;
+                g_shm->panel_drag_y = 0;
+                MemoryBarrier();
+                g_shm->panel_dragging = 1;
+                SetCapture(h);
+                return 0;
+            }
             if (map_open()) {                  /* drag the full map around */
                 g_mapdrag = 1;
                 g_mapdrag_x = g_mapdown_x = mx;
@@ -499,6 +531,13 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case WM_MOUSEMOVE:
             if (g_dragging) { set_position(mx - g_drag_dx, my - g_drag_dy); return 0; }
+            if (g_pandrag) {
+                g_shm->panel_drag_x += mx - g_pandrag_x;
+                g_shm->panel_drag_y += my - g_pandrag_y;
+                g_pandrag_x = mx;
+                g_pandrag_y = my;
+                return 0;
+            }
             if (g_mapdrag) {
                 if (abs(mx - g_mapdown_x) > CLICK_SLOP || abs(my - g_mapdown_y) > CLICK_SLOP) g_mapmoved = 1;
                 g_shm->map_drag_x += mx - g_mapdrag_x;
@@ -520,6 +559,11 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (map_open()) return 0;          /* clicks on the map don't walk / act in the game */
             break;
         case WM_LBUTTONUP:
+            if (g_pandrag) {                   /* let go: the view snaps back to you */
+                end_pan();
+                ReleaseCapture();
+                return 0;
+            }
             if (g_mapdrag) {
                 g_mapdrag = 0;
                 ReleaseCapture();
@@ -537,6 +581,7 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CAPTURECHANGED:
             if (g_dragging) { g_dragging = 0; push_event(EV_MOVED, 0); }
             g_mapdrag = 0;
+            if (g_pandrag) end_pan();          /* alt-tab etc. mid-drag: snap back too */
             break;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:

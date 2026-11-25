@@ -70,6 +70,9 @@ O_SEQ, O_W, O_H, O_OFFX, O_OFFY, O_ANCHOR, O_FLAGS = 8, 12, 16, 20, 24, 28, 32
 O_STATE, O_FRAMES, O_VIEW_W, O_VIEW_H = 36, 40, 44, 48
 O_DLLVER, O_CAPTURING, O_EVHEAD, O_MSG, O_EVENTS = 52, 56, 60, 64, 192
 O_MAP_INPUT = 1336       # int32 running totals: mouse drag x, y (pixels), wheel (120 per notch)
+O_PANEL_DRAG = 1348      # int32 x, y drag since the press (pixels), uint32 1 while held (DLL v5)
+O_MAP_RECT = 1360        # uint32 x, y, w, h of the mini map inside the panel (we write it)
+SNAP_BACK = 0.25         # seconds the mini map takes to glide back to you after a drag
 VK_ESCAPE, VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN, VK_HOME = 0x1B, 0x25, 0x26, 0x27, 0x28, 0x24
 ZOOM_IN_KEYS, ZOOM_OUT_KEYS = (0x6B, 0xBB), (0x6D, 0xBD)        # numpad / main-row + and -
 PAN_KEYS = {VK_LEFT: (-1, 0), VK_RIGHT: (1, 0), VK_UP: (0, 1), VK_DOWN: (0, -1)}
@@ -201,6 +204,12 @@ class Shm:
         self.set_position(load_position())
         self.set_flags(FLAG_VISIBLE)
         self.ev_tail = self.u32(O_EVHEAD)
+        struct.pack_into("<IIII", self.m, O_MAP_RECT, *panel.MAP_RECT)
+
+    def panel_drag(self):
+        """((x, y) pixels the mini map has been dragged since the press, held?) from the DLL."""
+        x, y, held = struct.unpack_from("<iiI", self.m, O_PANEL_DRAG)
+        return (x, y), bool(held)
 
     def set_position(self, pos):
         struct.pack_into("<iiI", self.m, O_OFFX, pos["off_x"], pos["off_y"], pos["anchor"])
@@ -252,6 +261,35 @@ class Shm:
         self.m.close()
 
 
+class MapPan:
+    """Where the mini map is looking: dragged away while the button is held, then a short glide
+    back to following you."""
+
+    def __init__(self):
+        self.offset, self.released, self.held = (0, 0), None, False   # released: (offset at release, when)
+
+    @property
+    def active(self):
+        """Being dragged or gliding back: worth redrawing quickly."""
+        return self.held or self.offset != (0, 0)
+
+    def update(self, drag, held, now):
+        self.held = held
+        if held:
+            self.offset, self.released = drag, None
+        elif self.offset != (0, 0) and self.released is None:
+            self.released = (self.offset, now)
+        if self.released:
+            (x, y), t = self.released
+            f = 1 - (now - t) / SNAP_BACK
+            if f <= 0:
+                self.offset, self.released = (0, 0), None
+            else:
+                f = f * f                              # ease out: fast at first, settling on you
+                self.offset = (round(x * f), round(y * f))
+        return self.offset
+
+
 def unload_old(pid, shm):
     """Ask any loaded copy of our DLL (v1 or older v2) to unload; wait until it's gone."""
     shm.set_flags(FLAG_UNLOAD)
@@ -290,6 +328,7 @@ class InGame:
         self.fullmap, self.fullmap_r, self.last_img = False, None, None
         self.pin_labels = load_ui().get("pin_labels", True) is not False
         self.map_input = (0, 0, 0)            # last drag / wheel totals seen from the DLL
+        self.pan = MapPan()                    # dragging the mini map to look around
         self.toast = None                      # (text, kind, expires_at)
         self.inbox_n, self.inbox_checked = 0, 0.0
         self.jobs = share.Jobs(self.store.world, self.notify)
@@ -605,6 +644,7 @@ class InGame:
             self.tell_update()
         toast = self.current_toast()
         full = self.fullmap and not self.picker.open and snap.state == IN_GAME
+        pan = self.pan.update(*self.shm.panel_drag(), time.time()) if not full else (0, 0)
         # The recorder saves a new area / link / area map a moment after you arrive: redraw then.
         data = self.fullmap_r.refresh() if full and self.fullmap_r else None
         if full and self.fullmap_r:
@@ -615,7 +655,7 @@ class InGame:
             key = (full, data, self.pin_labels, full and self.fullmap_r and self.fullmap_r.view_key(), toast, self.inbox_n, snap.state, snap.area, len(self.pois),
                    tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                    tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
-                   (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)
+                   (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None, pan)
         if key != self.last_key:
             if self.picker.open:
                 img = panel.render_picker(self.picker, self.store.area_name)
@@ -623,7 +663,8 @@ class InGame:
                 size = frame_size(self.shm.u32(O_VIEW_W), self.shm.u32(O_VIEW_H))
                 img = self.fullmap_r.render(size, snap, g, self.nav, self.map_img, toast)
             else:
-                img = panel.render(snap, g, self.pois, snap.size, self.map_img, toast=toast, inbox=self.inbox_n)
+                img = panel.render(snap, g, self.pois, snap.size, self.map_img, toast=toast, inbox=self.inbox_n,
+                                   pan=pan)
             self.publish(img)
             self.last_img, self.last_key = img, key
         # (while the loop is busy, heartbeat() keeps the last frame alive)
@@ -638,7 +679,8 @@ class InGame:
             while True:
                 t0 = time.time()
                 self.frame()
-                time.sleep(max(0.0, (0.03 if self.picker.open else 0.1) - (time.time() - t0)))
+                quick = self.picker.open or self.pan.active
+                time.sleep(max(0.0, (0.03 if quick else 0.1) - (time.time() - t0)))
         except KeyboardInterrupt:
             pass
         finally:

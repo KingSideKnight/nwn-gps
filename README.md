@@ -22,7 +22,8 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
   (`resources.py`, `maps.py`, `worldmap.py`). Areas that land on top of each other are slid
   along their shared edge, else the smallest branch hanging off one join is moved clear and that
   join is drawn as a dashed line (`_settle` / `_separate`; `tests/test_worldmap_overlap.py` checks
-  random worlds never overlap). Clicks on the full map arrive as `EV_MAPCLICK`
+  random worlds never overlap). Dragging the panel's mini map pans it (DLL v5 writes the drag to
+  `panel_drag_*`; `ingame.MapPan` glides it back on release). Clicks on the full map arrive as `EV_MAPCLICK`
   events and are hit-tested against what the last frame drew (`FullMap.pick_at`).
 - **Settings and updates:** `settings_window.py` (tkinter; S in the launcher window) writes
   settings.json, which the in-game part re-reads live. `updates.py` is the only network code: a

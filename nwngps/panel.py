@@ -18,6 +18,7 @@ TOAST_COLORS = {"ok": (76, 217, 100, 255), "info": (63, 193, 255, 255), "warn": 
                 "error": (255, 99, 99, 255)}
 SS = 2                                  # supersampling factor
 MAP_Y, MAP_SIZE, ARROW_Y = 178, 300, 108
+MAP_RECT = (10, MAP_Y + 10, MAP_SIZE - 20, MAP_SIZE - 20)   # the mini map inside the panel (x, y, w, h)
 BG = (16, 20, 24, 215)
 FG, DIM = (232, 238, 242, 255), (125, 138, 148, 255)
 PIN, DOOR, ME, ROUTE = (242, 201, 76, 255), (176, 122, 74, 255), (63, 193, 255, 255), (76, 217, 100, 255)
@@ -183,7 +184,8 @@ def _title(d, area_name):
         _text(d, x, 14, name, 9, DIM)
 
 
-def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
+def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0, pan=(0, 0)):
+    """pan: (x, y) panel pixels the mini map is dragged by (looking around; 0, 0 = following you)."""
     img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
@@ -194,7 +196,8 @@ def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
     elif inbox:
         toast_banner(img, d, f"{inbox} shared map{'s' if inbox > 1 else ''} in your Inbox - "
                              f"{KEYTEXT['import']} to import", "info", MAP_Y + 14, W)
-    _text(d, W / 2, DRAG_HINT_Y, "Ctrl+Shift + drag the panel to move it", 7, DIM, anchor="mm")
+    _text(d, W / 2, DRAG_HINT_Y, "Drag the map to look around  ·  Ctrl+Shift + drag to move the panel", 7, DIM,
+          anchor="mm")
     if g:
         _text(d, 14, 12, g.dest_name[:34], 11, FG, bold=True)
     else:
@@ -208,7 +211,7 @@ def render(snap, g, pois, area_size=None, map_img=None, toast=None, inbox=0):
         _guidance(d, g)
     else:
         _text(d, 14, 40, f"No destination. Press {KEYTEXT['search']} to choose one.", 10, DIM, width=W - 28)
-    _map(img, d, snap, g, pois, area_size, map_img)
+    _map(img, d, snap, g, pois, area_size, map_img, pan)
     if toast:     # draw messages on top of the map
         toast_banner(img, d, toast[0], toast[1], MAP_Y + 14, W)
     elif inbox:
@@ -260,28 +263,36 @@ FOLLOW_VIEW = 120.0   # metres: larger areas show a window this big centred on y
 ART_PPM = 3.2         # tile-art pixels per metre (32 px per 10 m tile)
 
 
-def _view(s, w_m, h_m):
-    """(left, top, size) of the visible square in world metres (top = north edge)."""
+def _view(s, w_m, h_m, pan_m=(0.0, 0.0)):
+    """(left, top, size) of the visible square in world metres (top = north edge). pan_m moves the
+    window's centre away from the player (dragging the map); it stays inside the area."""
     big = max(w_m, h_m)
-    if big <= FOLLOW_VIEW:                       # whole area, centred
+    if big <= FOLLOW_VIEW:                       # whole area, centred (nothing to look around for)
         v = big
         cx, cy = w_m / 2, h_m / 2
     else:                                        # follow the player, clamped to the area
         v = FOLLOW_VIEW
-        px, py = s.pos[:2]
+        px, py = s.pos[0] + pan_m[0], s.pos[1] + pan_m[1]
         cx = min(max(px, v / 2), w_m - v / 2) if w_m > v else w_m / 2
         cy = min(max(py, v / 2), h_m - v / 2) if h_m > v else h_m / 2
     return cx - v / 2, cy + v / 2, v
 
 
-def _map(img, d, s, g, pois, area_size, map_img=None):
+def pan_metres(pan_px, view=FOLLOW_VIEW):
+    """Mouse drag on the mini map (panel pixels, y down) -> how far the view centre moves (metres,
+    y north). Dragging the map right shows what's west of you, like grabbing paper."""
+    scale = MAP_RECT[2] / view
+    return -pan_px[0] / scale, pan_px[1] / scale
+
+
+def _map(img, d, s, g, pois, area_size, map_img=None, pan=(0, 0)):
     w_m, h_m = (area_size[0] * 10, area_size[1] * 10) if area_size and all(area_size) else (0, 0)
     if not w_m or not h_m:
         xs = [p["x"] for p in pois] + [s.pos[0]]
         ys = [p["y"] for p in pois] + [s.pos[1]]
         w_m, h_m = max(xs) + 10, max(ys) + 10
     side = MAP_SIZE - 20                         # panel pixels
-    left, top, v = _view(s, w_m, h_m)
+    left, top, v = _view(s, w_m, h_m, pan_metres(pan))
     scale = side / v                             # panel pixels per metre
 
     def P(x, y):                                 # world -> layer pixels (not supersampled)
@@ -324,7 +335,10 @@ def _map(img, d, s, g, pois, area_size, map_img=None):
         else:
             ld.rectangle(((px - 2) * SS, (py - 2) * SS, (px + 2) * SS, (py + 2) * SS), fill=DOOR)
     _route_and_player(ld, s, g, pois, P)
-    ox, oy = 10, MAP_Y + 10
+    mx, my = P(*s.pos[:2])
+    if not (0 <= mx <= side and 0 <= my <= side):
+        _edge_pointer(ld, mx, my, side, ME, size=1.6)   # looking elsewhere: this way back to you
+    ox, oy = MAP_RECT[0], MAP_RECT[1]
     img.alpha_composite(layer, (ox * SS, oy * SS))
     d.rectangle((ox * SS, oy * SS, (ox + side) * SS, (oy + side) * SS), outline=MAP_EDGE, width=SS)
     if v < max(w_m, h_m):
@@ -334,16 +348,16 @@ def _map(img, d, s, g, pois, area_size, map_img=None):
 EDGE_INSET = 7        # panel pixels: off-window pin pointers sit this far inside the map border
 
 
-def _edge_pointer(d, px, py, side):
-    """A small gold arrow on the map's border, pointing at a pin outside the visible window."""
+def _edge_pointer(d, px, py, side, color=PIN, size=1.0):
+    """A small arrow on the map's border, pointing at a pin (or you) outside the visible window."""
     c = side / 2
     dx, dy = px - c, py - c
     t = (c - EDGE_INSET) / max(abs(dx), abs(dy))            # scale onto the inset square
     ex, ey = c + dx * t, c + dy * t
     ang = math.atan2(dy, dx)
-    tip = (ex + 5 * math.cos(ang), ey + 5 * math.sin(ang))
-    back = [(ex + 4 * math.cos(ang + a), ey + 4 * math.sin(ang + a)) for a in (2.4, -2.4)]
-    d.polygon([(x * SS, y * SS) for x, y in (tip, *back)], fill=PIN, outline=(0, 0, 0, 220))
+    tip = (ex + 5 * size * math.cos(ang), ey + 5 * size * math.sin(ang))
+    back = [(ex + 4 * size * math.cos(ang + a), ey + 4 * size * math.sin(ang + a)) for a in (2.4, -2.4)]
+    d.polygon([(x * SS, y * SS) for x, y in (tip, *back)], fill=color, outline=(0, 0, 0, 220))
 
 
 def _route_and_player(d, s, g, pois, P):

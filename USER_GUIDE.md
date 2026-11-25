@@ -114,6 +114,7 @@ upgrading keeps them.
 | **Ctrl+Shift+E** | Export your map to share with friends |
 | **Ctrl+Shift+I** | Import maps friends sent you |
 | **Ctrl+Shift + drag** | Move the panel (it remembers where you put it) |
+| **Drag the small map** | Look around a big area. Let go and it glides back to following you; while you look elsewhere, a blue arrow on its edge points back to you. (Small areas already fit whole, so there's nothing to drag.) Clicks on the small map don't reach the game; clicks on the rest of the panel do |
 
 The panel always shows these keys at the bottom (the full-screen map shows its own), so you don't
 need to memorise them. To change them, press S in the NWN GPS window (see [Settings](#settings)).
@@ -189,9 +190,21 @@ back by hand.
 - **Import while you're on the same server the map is from.** Each map file knows its server, and
   a file from another server is not merged: it stays in the Inbox (the message names its server)
   until you press Ctrl+Shift+I while playing there.
-- Exported maps don't include when you played (times and visit counts are removed).
+- Several files at once, from one friend or many, are fine. What you've seen yourself always wins:
+  a friend's map only adds what you don't have. If two friends disagree about where a door leads,
+  the first one imported counts and the other is kept as untrusted.
+- The same file sent twice is only imported once (the second copy just moves to `Inbox\merged`),
+  and a teleport a friend saw once doesn't become a route however many of their maps you import.
+- Exported maps don't include when you played (times and visit counts are removed), or whose maps
+  you've imported. They do carry a random id for your map (nothing about you), so a friend's GPS
+  counts your map once.
 - Imported files are checked thoroughly and anything invalid is skipped, but routes from a friend's
   map are only as good as that map: **only import maps from people you trust.** See `SECURITY.md`.
+
+**Undoing an import:** open Settings (press **S** in the NWN GPS window), click **Imported maps...**,
+pick the file and click **Undo selected import**. That file's places, routes and area maps come
+back out of your map. Anything you've since seen yourself in the game stays. Your map is backed up
+first, and the file stays in `Inbox\merged` if you want to import it again later.
 
 ## Settings
 **Press S in the NWN GPS window** to open the Settings window (or run `NWN-GPS.exe settings`,
