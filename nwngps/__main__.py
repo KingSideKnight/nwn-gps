@@ -5,12 +5,13 @@
   NWN-GPS ingame [dest]      only the in-game panel
   NWN-GPS settings           the Settings window (also: press S in the NWN GPS window)
   NWN-GPS cli <command> ...  search, routes, export/merge, world map (see `NWN-GPS cli`)
-  NWN-GPS overlay | hud      desktop-window / RivaTuner alternatives to the in-game panel
+  NWN-GPS mapwindow          the map window (for a second monitor; the launcher starts it)
+  NWN-GPS hud                directions as text through RivaTuner Statistics Server
 """
 import sys
 
 PARTS = {"recorder": "nwngps.recorder", "ingame": "nwngps.ingame", "cli": "nwngps.cli",
-         "overlay": "nwngps.overlay", "hud": "nwngps.hud", "launcher": "nwngps.launcher",
+         "mapwindow": "nwngps.mapwindow", "hud": "nwngps.hud", "launcher": "nwngps.launcher",
          "settings": "nwngps.settings_window"}
 
 

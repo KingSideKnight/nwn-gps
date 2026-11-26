@@ -25,6 +25,12 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
   random worlds never overlap). Dragging the panel's mini map pans it (DLL v5 writes the drag to
   `panel_drag_*`; `ingame.MapPan` glides it back on release). Clicks on the full map arrive as `EV_MAPCLICK`
   events and are hit-tested against what the last frame drew (`FullMap.pick_at`).
+- **Map window:** `mapwindow.py` is a third launcher part, idle until `"map_window"` is on
+  (Ctrl+Shift+W = `EV_WINDOW`, DLL v6, flips it in settings.json). A worker thread with its own
+  read-only `Session` and `Store` draws `FullMap` frames; tkinter only shows them. The window is
+  `WS_EX_NOACTIVATE` so clicking it never takes focus from a fullscreen game; `place()` picks a
+  monitor the game isn't on and drops a remembered spot whose monitor is gone
+  (`tests/test_mapwindow.py`).
 - **Settings and updates:** `settings_window.py` (tkinter; S in the launcher window) writes
   settings.json, which the in-game part re-reads live. `updates.py` is the only network code: a
   daily GitHub release check, opt-out, never downloads.

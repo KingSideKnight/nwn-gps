@@ -59,7 +59,8 @@ def validate(values, base):
     deaths = [w.strip() for w in values["death_areas"].split(",") if w.strip()]
     out = dict(base)
     out.update(hotkeys=keys, game_dir=game, user_dir=user, death_areas=deaths,
-               check_updates=bool(values["check_updates"]), dm_mode=bool(values["dm_mode"]))
+               check_updates=bool(values["check_updates"]), dm_mode=bool(values["dm_mode"]),
+               map_window=bool(values.get("map_window", base.get("map_window"))))
     return out, problems
 
 
@@ -226,6 +227,16 @@ def main():
         row=row, column=0, columnspan=3, sticky="w", pady=(4, 0))
     row += 1
 
+    heading("Map window")
+    mapwin = tk.BooleanVar(value=bool(s.get("map_window")))
+    ttk.Checkbutton(frm, text="Show the map in its own window", variable=mapwin).grid(
+        row=row, column=0, columnspan=3, sticky="w")
+    row += 1
+    ttk.Label(frm, text="For a second monitor, or beside a windowed game. Move and size it as you like; it "
+                        "remembers. The Map window key above turns it on and off in the game.",
+              wraplength=520, foreground="#555").grid(row=row, column=0, columnspan=3, sticky="w")
+    row += 1
+
     heading("Folders")
     dirs = {}
     for key, label, hint in (("game_dir", "Game folder", "empty = find it by itself"),
@@ -271,7 +282,7 @@ def main():
         stop_capture()
         values = {"hotkeys": {a: v.get() for a, v in key_vars.items()}, "game_dir": dirs["game_dir"].get(),
                   "user_dir": dirs["user_dir"].get(), "death_areas": death.get(), "check_updates": upd.get(),
-                  "dm_mode": dm.get()}
+                  "dm_mode": dm.get(), "map_window": mapwin.get()}
         new, problems = validate(values, config.load_settings())
         if problems:
             status.configure(text="Not saved:\n" + "\n".join(problems), foreground="#b00")

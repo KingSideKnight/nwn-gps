@@ -52,7 +52,7 @@ OLD_LOCALAPPDATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppDat
 
 DEFAULT_HOTKEYS = {
     "search": "Ctrl+Shift+F", "clear": "Ctrl+Shift+X", "map": "Ctrl+Shift+M", "hide": "Ctrl+Shift+G",
-    "export": "Ctrl+Shift+E", "import": "Ctrl+Shift+I", "labels": "Ctrl+Shift+L",
+    "export": "Ctrl+Shift+E", "import": "Ctrl+Shift+I", "labels": "Ctrl+Shift+L", "window": "Ctrl+Shift+W",
 }
 DEFAULTS = {
     "version": SETTINGS_VERSION,
@@ -68,6 +68,8 @@ DEFAULTS = {
     "dm_mode": False,
     # Once a day, ask GitHub whether a newer NWN GPS release exists (nothing is downloaded).
     "check_updates": True,
+    # A separate map window, e.g. for a second monitor (Ctrl+Shift+W in the game turns it on / off).
+    "map_window": False,
 }
 
 

@@ -25,7 +25,7 @@
 #include <string.h>
 
 /* ---- shared memory layout v2 (keep in sync with nwngps/ingame.py) ---- */
-#define DLL_VERSION 5u
+#define DLL_VERSION 6u
 #define SHM_NAME L"nwngps_overlay_v3"
 #define SHM_MAGIC 0x5350474Eu /* 'NGPS' */
 #define MAX_W 2048
@@ -50,6 +50,7 @@
 #define EV_LABELS 10u  /* Ctrl+Shift+L: pin names on the full map on / off */
 #define EV_MAPKEY 11u  /* code = virtual key pressed while the full map is open (Esc, arrows, Home, +/-) */
 #define EV_MAPCLICK 12u /* left click (not a drag) on the open full map: code = x | y << 16, window pixels */
+#define EV_WINDOW 13u  /* v6, Ctrl+Shift+W: map window (for a second monitor) on / off */
 #define CLICK_SLOP 5    /* pixels the mouse may move between press and release and still be a click */
 
 /* anchors: which screen corner the offsets are measured from */
@@ -61,10 +62,13 @@
 typedef struct { uint32_t type, code, mods, pad; } ShmEvent;
 
 /* configurable hotkeys (v4), in this order; Python fills the table from settings.json */
-#define HK_COUNT 7
-enum { HK_SEARCH, HK_CLEAR, HK_MAP, HK_HIDE, HK_EXPORT, HK_IMPORT, HK_LABELS };
-static const uint32_t HK_DEFAULT[HK_COUNT][2] = {{'F', 3}, {'X', 3}, {'M', 3}, {'G', 3}, {'E', 3}, {'I', 3}, {'L', 3}};
-static const uint32_t HK_EVENT[HK_COUNT] = {EV_OPEN, EV_CLEAR, EV_FULLMAP, EV_TOGGLE, EV_EXPORT, EV_IMPORT, EV_LABELS};
+#define HK_COUNT 8
+#define HK_TABLE1 7      /* entries in the v4 table at offset 1280; later ones live in hotkeys2 */
+enum { HK_SEARCH, HK_CLEAR, HK_MAP, HK_HIDE, HK_EXPORT, HK_IMPORT, HK_LABELS, HK_WINDOW };
+static const uint32_t HK_DEFAULT[HK_COUNT][2] = {{'F', 3}, {'X', 3}, {'M', 3}, {'G', 3}, {'E', 3}, {'I', 3}, {'L', 3},
+                                                 {'W', 3}};
+static const uint32_t HK_EVENT[HK_COUNT] = {EV_OPEN, EV_CLEAR, EV_FULLMAP, EV_TOGGLE, EV_EXPORT, EV_IMPORT, EV_LABELS,
+                                            EV_WINDOW};
 
 typedef struct {
     uint32_t magic, version;
@@ -82,7 +86,7 @@ typedef struct {
     char msg[128];
     ShmEvent events[GPS_EV_RING];     /* at offset 192 */
     uint8_t pad[64];                  /* -> offset 1280 */
-    uint32_t hotkeys[HK_COUNT][2];    /* v4: {virtual key, mods: 1 shift, 2 ctrl, 4 alt}; vk 0 = default */
+    uint32_t hotkeys[HK_TABLE1][2];   /* v4: {virtual key, mods: 1 shift, 2 ctrl, 4 alt}; vk 0 = default */
     /* full map open: running totals of mouse drag (pixels) and wheel (WHEEL_DELTA units); Python
        keeps the last values it saw, so nothing is lost however fast the mouse moves */
     volatile int32_t map_drag_x, map_drag_y, map_wheel;   /* at offset 1336 */
@@ -93,6 +97,8 @@ typedef struct {
     /* where the mini map sits inside the panel image (x, y, w, h); Python writes it. w = 0: no
        mini map to drag (old Python), so clicks on the panel go to the game as before */
     volatile uint32_t map_rect[4];                        /* at offset 1360 */
+    /* v6: hotkeys added after the v4 table (same format): the map window */
+    uint32_t hotkeys2[HK_COUNT - HK_TABLE1][2];           /* at offset 1376 */
 } ShmHeader;
 
 /* ---- GL constants / function pointers beyond GL 1.1 ---- */
@@ -589,7 +595,8 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 uint32_t mods = (shift ? 1u : 0u) | (ctrl ? 2u : 0u) | (GetKeyState(VK_MENU) < 0 ? 4u : 0u);
                 int i;
                 for (i = 0; i < HK_COUNT; i++) {
-                    uint32_t vk = g_shm->hotkeys[i][0], m = g_shm->hotkeys[i][1];
+                    const uint32_t *hk = i < HK_TABLE1 ? g_shm->hotkeys[i] : g_shm->hotkeys2[i - HK_TABLE1];
+                    uint32_t vk = hk[0], m = hk[1];
                     if (!vk) { vk = HK_DEFAULT[i][0]; m = HK_DEFAULT[i][1]; }
                     if ((uint32_t)wp == vk && mods == m) {
                         if (i == HK_SEARCH) set_capture(1);   /* picker owns the keyboard from now on */

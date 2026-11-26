@@ -5,12 +5,14 @@ Keys: A-Z, 0-9, F1-F12. At least one modifier is required (so the game keeps its
 """
 from .config import DEFAULT_HOTKEYS
 
-ORDER = ["search", "clear", "map", "hide", "export", "import", "labels"]     # same order as the DLL's table
+ORDER = ["search", "clear", "map", "hide", "export", "import", "labels", "window"]   # same order as the DLL
 LABELS = {"search": "Search", "clear": "Clear", "map": "Map", "hide": "Hide",
           "export": "Export map", "import": "Import maps",
-          "labels": "Pin names"}
+          "labels": "Pin names", "window": "Map window"}
 MODS = {"shift": 1, "ctrl": 2, "control": 2, "alt": 4}
-TABLE_OFFSET = 1280
+TABLE_OFFSET = 1280        # the first 7 keys (DLL v4)
+TABLE2_OFFSET = 1376       # the rest (DLL v6: the map window)
+TABLE1_COUNT = 7
 
 
 def parse(text):
@@ -51,8 +53,10 @@ def resolve(settings_hotkeys, warn=print):
 
 
 def table_bytes(resolved):
+    """(bytes for TABLE_OFFSET, bytes for TABLE2_OFFSET)."""
     import struct
-    return b"".join(struct.pack("<II", resolved[a][0], resolved[a][1]) for a in ORDER)
+    rows = [struct.pack("<II", resolved[a][0], resolved[a][1]) for a in ORDER]
+    return b"".join(rows[:TABLE1_COUNT]), b"".join(rows[TABLE1_COUNT:])
 
 
 def legend_rows(resolved):
@@ -61,7 +65,7 @@ def legend_rows(resolved):
         mods, _, key = text.rpartition("+")
         return mods, key
     rows = []
-    for actions in (["search", "clear", "map", "hide"], ["export", "import"]):
+    for actions in (["search", "clear", "map", "hide"], ["export", "import", "window"]):
         mods = {split(resolved[a][2])[0] for a in actions}
         if len(mods) == 1:
             rows.append((mods.pop(), [(split(resolved[a][2])[1], LABELS[a]) for a in actions]))

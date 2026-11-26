@@ -41,6 +41,7 @@ class FullMap:
         self.center, self.span, self.view_cid = None, None, None
         self.last_view, self.last_px_per_m = None, None
         self.clickable = None        # what the last frame drew, for click to go (see pick_at)
+        self.back_hint = "Home: back to you"   # how to follow you again after scrolling
 
     # --- scrolling and zooming (mouse drag / wheel, arrows, +/-, Home) ---------------------------
     def reset_view(self):
@@ -121,7 +122,9 @@ class FullMap:
             self.rebuild()
         return v
 
-    def render(self, size, snap, g, nav, area_map_img, toast=None):
+    def render(self, size, snap, g, nav, area_map_img, toast=None, hint=None, footer_route=True):
+        """hint: the footer's key help (default: the in-game keys). footer_route: the directions
+        in the footer (off when the caller shows them elsewhere)."""
         W, H = size
         img = Image.new("RGBA", (W, H), BG)
         d = ImageDraw.Draw(img)
@@ -150,7 +153,7 @@ class FullMap:
             route = self._route_points(snap, nav, P, to_px)
             inside = None if hx is None else snap.area_name
             if self.center is not None:
-                _text(d, (box[2] - 8, box[3] - 8), f"{view[2] - view[0]:.0f} m view - Home: back to you", 8,
+                _text(d, (box[2] - 8, box[3] - 8), f"{view[2] - view[0]:.0f} m view - {self.back_hint}", 8,
                       DIM, anchor="rs")
             elif view != self.world.bounds(cid):
                 _text(d, (box[2] - 8, box[3] - 8), f"{view[2] - view[0]:.0f} m view, following you", 8, DIM,
@@ -174,11 +177,12 @@ class FullMap:
         if inside:
             where += "  (inside - shown at its door)"
         _text(d, (W - PAD, 18), where[:90], 9, DIM, anchor="ra")
-        if g:
+        if g and footer_route:
             _text(d, (PAD, H - 12), f"To {g.dest_name}: {g.line1}"[:140], 9, FG, anchor="ls")
-        hint = "click  go there    " + ("drag / arrows scroll    wheel / +- zoom    " if home is not None else "")
-        _text(d, (W - PAD, H - 12), f"{hint}{KEYTEXT['labels']}  pin names {'off' if self.pin_labels else 'on'}"
-                                    f"    Esc  close", 9, DIM, anchor="rs")
+        if hint is None:
+            hint = ("click  go there    " + ("drag / arrows scroll    wheel / +- zoom    " if home is not None else "")
+                    + f"{KEYTEXT['labels']}  pin names {'off' if self.pin_labels else 'on'}    Esc  close")
+        _text(d, (W - PAD, H - 12), hint, 9, DIM, anchor="rs")
         if toast:
             color = TOAST_COLORS.get(toast[1], TOAST_COLORS["info"])
             tw = d.textlength(toast[0], font=font(10)) + 40

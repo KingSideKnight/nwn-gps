@@ -9,6 +9,7 @@ In the game:
   Ctrl+Shift+M   full-screen world map (press again or Esc to close; click a place to go there)
   Ctrl+Shift+E   export your map to Documents\\NWN GPS\\Exports (to share)
   Ctrl+Shift+I   import friends' maps from Documents\\NWN GPS\\Inbox (backs yours up first)
+  Ctrl+Shift+W   map window on / off (the world map in its own window, e.g. on a second monitor)
   Ctrl+Shift + drag the panel with the left mouse button to move it (position is saved)
 
 Loads the DLL from native/build into the running game (no game files change;
@@ -38,7 +39,7 @@ from .memory import k32, modules
 from .nav import Navigator
 from .fullmap import FullMap, frame_size
 from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_LABELS, EV_MAPCLICK,
-                     EV_MAPKEY, EV_MOVED, EV_OPEN, EV_TOGGLE, Picker, remember)
+                     EV_MAPKEY, EV_MOVED, EV_OPEN, EV_TOGGLE, EV_WINDOW, Picker, remember)
 from . import share
 
 TOAST_SECONDS = 8.0
@@ -371,8 +372,9 @@ class InGame:
         """Hotkeys from settings.json -> the DLL's key table and the panel legend."""
         from . import config, hotkeys
         hk = hotkeys.resolve(config.load_settings()["hotkeys"], warn=log)
-        table = hotkeys.table_bytes(hk)
-        self.shm.m[hotkeys.TABLE_OFFSET:hotkeys.TABLE_OFFSET + len(table)] = table
+        t1, t2 = hotkeys.table_bytes(hk)
+        self.shm.m[hotkeys.TABLE_OFFSET:hotkeys.TABLE_OFFSET + len(t1)] = t1
+        self.shm.m[hotkeys.TABLE2_OFFSET:hotkeys.TABLE2_OFFSET + len(t2)] = t2
         panel.set_legend(hotkeys.legend_rows(hk), {a: v[2] for a, v in hk.items()})
         self.hotkey_text = ", ".join(f"{v[2]} {hotkeys.LABELS[a].lower()}" for a, v in hk.items())
 
@@ -406,6 +408,15 @@ class InGame:
             self.last_key = None                      # redraw the legend
             log("settings changed: hotkeys reloaded")
             self.notify("Settings saved - new keys are active", "ok")
+
+    def toggle_map_window(self):
+        """Ctrl+Shift+W: the map window (a separate part of NWN GPS) on / off, saved in settings.json."""
+        from . import config
+        s = config.load_settings()
+        s["map_window"] = not s.get("map_window")
+        config.save_settings(s)
+        log(f"hotkey: map window {'on' if s['map_window'] else 'off'}")
+        self.notify("Map window on" if s["map_window"] else "Map window off", "info")
 
     def notify(self, text, kind="info"):
         """On-screen message in the panel (called from background jobs too)."""
@@ -521,6 +532,8 @@ class InGame:
                 save_ui(pin_labels=self.pin_labels)
                 self.notify(f"Pin names {'on' if self.pin_labels else 'off'}", "info")
                 log(f"hotkey: pin names {'on' if self.pin_labels else 'off'}")
+            elif t == EV_WINDOW:
+                self.toggle_map_window()
             elif t == EV_CLEAR:
                 log("hotkey: clear destination")
                 set_target(None)
@@ -561,20 +574,10 @@ class InGame:
         try:
             if self.maps is None:
                 self.maps = maps.Maps(Resources(self.nwsync_host))
-            tiles = maps.read_tiles(self.session.mem, snap.area_ptr, *snap.size) if snap.size else None
-            tileset, w, h = snap.tileset, *(snap.size or (0, 0))
-            if not tiles:
-                rec = self.store.tiles(snap.area)
-                if not rec:
-                    return None
-                tileset, w, h, tiles = rec
-            t0 = time.time()
-            img = self.maps.image(tileset, w, h, tiles)
-            log(f"map: {snap.area_name} ({w}x{h} {tileset}) in {time.time() - t0:.2f}s")
-            return img
-        except Exception as e:     # a map is a nice-to-have: never break navigation over it
+        except Exception as e:
             log(f"map unavailable for {snap.area}: {e!r}")
             return None
+        return maps.area_image(self.maps, self.store, self.session.mem, snap, log)
 
     def auto_clear(self, g):
         """Clear the destination once you've been there for a few seconds."""

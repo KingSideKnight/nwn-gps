@@ -26,16 +26,20 @@ class Hotkeys(unittest.TestCase):
 
     def test_table_layout_matches_dll_order(self):
         r = H.resolve({})
-        t = H.table_bytes(r)
+        t, t2 = H.table_bytes(r)
         self.assertEqual(len(t), 7 * 8)
         self.assertEqual(struct.unpack_from("<II", t, 0), (ord("F"), 3))      # HK_SEARCH first
         self.assertEqual(struct.unpack_from("<II", t, 5 * 8), (ord("I"), 3))  # HK_IMPORT
-        self.assertEqual(struct.unpack_from("<II", t, 6 * 8), (ord("L"), 3))  # HK_LABELS last
+        self.assertEqual(struct.unpack_from("<II", t, 6 * 8), (ord("L"), 3))  # HK_LABELS last in table 1
+        self.assertEqual(struct.unpack_from("<II", t2, 0), (ord("W"), 3))     # HK_WINDOW in table 2 (v6)
         src = (Path(__file__).resolve().parent.parent / "native" / "nwngps_gl.c").read_text(encoding="utf-8")
-        self.assertIn(f"#define HK_COUNT {len(H.ORDER)}", src)               # DLL table the same size
+        self.assertIn(f"#define HK_COUNT {len(H.ORDER)}", src)               # DLL knows every key
+        self.assertIn(f"#define HK_TABLE1 {H.TABLE1_COUNT}", src)
         from nwngps import ingame
-        self.assertEqual(ingame.O_MAP_INPUT, H.TABLE_OFFSET + len(H.ORDER) * 8)   # map input right after it
+        self.assertEqual(ingame.O_MAP_INPUT, H.TABLE_OFFSET + H.TABLE1_COUNT * 8)   # map input right after it
         self.assertIn("map_wheel;   /* at offset 1336 */", src)
+        self.assertEqual(H.TABLE2_OFFSET, ingame.O_MAP_RECT + 16)            # table 2 right after map_rect
+        self.assertIn(f"hotkeys2[HK_COUNT - HK_TABLE1][2];           /* at offset {H.TABLE2_OFFSET} */", src)
 
     def test_legend_groups_common_modifiers(self):
         rows = H.legend_rows(H.resolve({}))

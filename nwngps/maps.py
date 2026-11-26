@@ -98,6 +98,26 @@ def parse_set(text):
     return out
 
 
+def area_image(maps, store, mem, snap, log=print):
+    """Tile-art map of the area you're in (from live memory, else the recorded layout), or None."""
+    import time
+    try:
+        tiles = read_tiles(mem, snap.area_ptr, *snap.size) if (snap.size and mem) else None
+        tileset, w, h = snap.tileset, *(snap.size or (0, 0))
+        if not tiles:
+            rec = store.tiles(snap.area)
+            if not rec:
+                return None
+            tileset, w, h, tiles = rec
+        t0 = time.time()
+        img = maps.image(tileset, w, h, tiles)
+        log(f"map: {snap.area_name} ({w}x{h} {tileset}) in {time.time() - t0:.2f}s")
+        return img
+    except Exception as e:     # a map is a nice-to-have: never break navigation over it
+        log(f"map unavailable for {snap.area}: {e!r}")
+        return None
+
+
 class Maps:
     def __init__(self, resources):
         self.res = resources

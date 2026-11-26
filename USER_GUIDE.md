@@ -113,6 +113,7 @@ upgrading keeps them.
 | **Ctrl+Shift+G** | Hide / show the panel |
 | **Ctrl+Shift+E** | Export your map to share with friends |
 | **Ctrl+Shift+I** | Import maps friends sent you |
+| **Ctrl+Shift+W** | Map window on / off: the world map in its own window, e.g. on a second monitor (see [Map window](#map-window)) |
 | **Ctrl+Shift + drag** | Move the panel (it remembers where you put it) |
 | **Drag the small map** | Look around a big area. Let go and it glides back to following you; while you look elsewhere, a blue arrow on its edge points back to you. (Small areas already fit whole, so there's nothing to drag.) Clicks on the small map don't reach the game; clicks on the rest of the panel do |
 
@@ -123,6 +124,24 @@ need to memorise them. To change them, press S in the NWN GPS window (see [Setti
 your destination; a click anywhere else in an area sends you to that spot. The route appears on
 the map straight away, and the panel guides you as usual. A click that turns into a drag just
 moves the map.
+
+## Map window
+The world map can also have a window of its own: on a second monitor, a TV, a tablet used as a
+screen, or beside the game if you play in a window. It's **off until you turn it on**, with
+**Ctrl+Shift+W** in the game or in Settings ("Map window"); the same key, its **Hide** button or
+its X turns it off again.
+- It shows the directions at the top and the world map below, following you. **Click** a place to
+  go there (the in-game panel picks up the new destination too), **drag** to look around, use the
+  mouse wheel or the **Zoom** buttons to zoom, and **Back to me** to follow you again. **Pin names**
+  turns the names on and off, **Always on top** keeps it above other windows.
+- **Where it opens:** the first time, it fills the biggest monitor the game isn't on, or, with a
+  single monitor, opens as a window. Move and resize it like any window; it remembers. If that
+  monitor isn't connected next time, it picks again.
+- **It never takes the keyboard from the game:** clicking it doesn't switch away from the game, so
+  a fullscreen game stays put. That's also why it has buttons rather than keys, and no search box
+  (use **Ctrl+Shift+F** in the game). If your game keeps the mouse on its own screen, use the
+  window by touch, or play in borderless fullscreen (NWN's display settings).
+- It works without the in-game panel, and keeps working if the game refuses the panel.
 
 ## How mapping works
 - The map grows as you explore. Every area you enter is recorded with its map pins, doors and
@@ -214,6 +233,7 @@ which works while NWN GPS isn't running too). There you can:
 - **Mapping:** death areas and DM mode (below).
 - **Folders:** the game folder and NWN user folder, if they weren't found by themselves. These
   apply the next time you start NWN GPS.
+- **Map window:** turn the [map window](#map-window) on or off.
 - **Updates:** turn the daily update check on or off, or **Check now** (see
   [Updates](#updates)).
 
@@ -230,6 +250,7 @@ NWN GPS first):
 - `"dm_mode"`: `true` records no links between areas (for the DM client, experimental, untested).
   The recorder picks this up at the next area change, no restart needed.
 - `"check_updates"`: `false` turns off the daily update check.
+- `"map_window"`: `true` shows the [map window](#map-window) (what Ctrl+Shift+W switches).
 
 ## Updates
 Once a day, when it starts, NWN GPS asks GitHub (where it's published) whether a newer version is
@@ -261,9 +282,8 @@ mentions it once in the game.
   happened next to a door). List the links with `NWN-GPS.exe cli links "<area name>"`, then
   `NWN-GPS.exe cli forget-link <id>` to delete a wrong one (your map is backed up first), or
   `distrust-link <id>` / `trust-link <id>` to stop or start using it for directions.
-- **Alternatives without the in-game panel:** `NWN-GPS.exe overlay "<place>"` (a window on top of the
-  game: windowed or borderless mode, or `--other-screen` for a second monitor) and
-  `NWN-GPS.exe hud` (text through RivaTuner Statistics Server).
+- **Alternatives without the in-game panel:** the [map window](#map-window) (Ctrl+Shift+W or
+  Settings), and `NWN-GPS.exe hud` (text through RivaTuner Statistics Server).
 - Logs: `Documents\NWN GPS\logs`. If a part keeps failing at startup, the NWN GPS window stops
   restarting it and shows the error.
 

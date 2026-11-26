@@ -13,7 +13,7 @@ import time
 
 from . import __version__, config
 
-PARTS = {"recorder": "recorder", "in-game GPS": "ingame"}
+PARTS = {"recorder": "recorder", "in-game GPS": "ingame", "map window": "mapwindow"}
 RESTART_DELAY = 5.0
 FAST_CRASH = 15.0        # seconds: dying sooner than this after starting counts as a startup crash
 MAX_FAST_CRASHES = 3     # then stop restarting that part and show why
