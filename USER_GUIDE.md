@@ -172,8 +172,19 @@ moved you, so NWN GPS judges each area change by where you were standing when it
 - Servers that just revive you in a graveyard are covered by the teleport rule: the place you died is
   random, so that "link" is never trusted.
 - Moving within the same area (a short teleport, a DM jump nearby) records nothing.
+- **Exits that go to different places:** some portals take you somewhere different each time (a
+  plane that returns you to wherever you came in from, a ship or portal that asks where to go).
+  Once an exit has taken you to two different areas, directions avoid it and walk instead; it's
+  only used when there's no other known way, and the panel then says "This exit has led to
+  different places: pick ... if asked". No way back is assumed through such an exit either.
+- **Coming out in the middle of an area:** a way back is only assumed when you came out next to a
+  door, a map pin or the map edge, the way a normal exit puts you. A portal that drops you in the
+  middle of an area (say, the way out of a plane you teleported into) never becomes a way in.
 
 Teleports and deaths never move areas around on the world map; only walked exits place areas.
+On the maps, the route line follows the areas you'll walk through. It stops at a portal or
+teleport (drawn as a ringed dot) and picks up again where you come out, rather than cutting
+straight across the map.
 If something wrong still gets in, see "A route sends me somewhere strange" below.
 
 **DM client (experimental, untested).** NWN GPS hasn't been tried in the DM client yet. DMs jump

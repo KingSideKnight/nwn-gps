@@ -28,6 +28,16 @@ def frame_size(view_w, view_h, max_w=1600):
     return min(2048, max(640, int(view_w * s))), min(2048, max(360, int(view_h * s)))
 
 
+def fit_text(d, text, size, width, bold=False):
+    """text, shortened with '...' to fit width pixels."""
+    f = font(size, bold)
+    if d.textlength(text, font=f) <= width:
+        return text
+    while text and d.textlength(text + "...", font=f) > width:
+        text = text[:-1]
+    return text.rstrip() + "..." if text else ""
+
+
 def _text(d, xy, s, size, color, bold=False, anchor="la"):
     d.text(xy, s, font=font(size, bold), fill=color, anchor=anchor)   # font() sizes are SS-scaled
 
@@ -150,7 +160,7 @@ class FullMap:
                               "spot": self._world_spot(cid, P, box)}
             to_px = lambda x, y: (box[0] + x, box[1] + y)       # noqa: E731
             me = to_px(*P(*here))
-            route = self._route_points(snap, nav, P, to_px)
+            route = self._route_lines(cid, me, snap, nav, P, to_px)
             inside = None if hx is None else snap.area_name
             if self.center is not None:
                 _text(d, (box[2] - 8, box[3] - 8), f"{view[2] - view[0]:.0f} m view - {self.back_hint}", 8,
@@ -160,14 +170,18 @@ class FullMap:
                       anchor="rs")
         else:                                              # area not linked yet: its own map
             title = "Area map (not linked to the world map yet)"
-            me, route, inside = self._area_only(img, snap, area_map_img, box), [], None
+            me, route, inside = self._area_only(img, snap, area_map_img, box), None, None
         # route + destination
         if route:
-            pts = [me] + route
-            for a, b in zip(pts, pts[1:]):
-                _dashed(d, a[0] / 2, a[1] / 2, b[0] / 2, b[1] / 2, ROUTE)    # _dashed works in SS=2 units
-            ex, ey = pts[-1]
-            d.ellipse((ex - 9, ey - 9, ex + 9, ey + 9), outline=ROUTE, width=3)
+            for line in route["lines"]:
+                for a, b in zip(line, line[1:]):
+                    _dashed(d, a[0] / 2, a[1] / 2, b[0] / 2, b[1] / 2, ROUTE)    # _dashed works in SS=2 units
+            for px, py in route["hops"]:               # teleport / server portal: the line stops here
+                d.ellipse((px - 7, py - 7, px + 7, py + 7), outline=ROUTE, width=2)
+                d.ellipse((px - 3, py - 3, px + 3, py + 3), fill=ROUTE)
+            if route["goal"]:
+                ex, ey = route["goal"]
+                d.ellipse((ex - 9, ey - 9, ex + 9, ey + 9), outline=ROUTE, width=3)
         fx, fy = (snap.facing or (0, 1, 0))[:2]
         if box[0] <= me[0] <= box[2] and box[1] <= me[1] <= box[3]:     # you may be scrolled out of view
             _arrow(d, me[0] / 2, me[1] / 2, 9, math.degrees(math.atan2(fx, fy)), ME)
@@ -177,12 +191,13 @@ class FullMap:
         if inside:
             where += "  (inside - shown at its door)"
         _text(d, (W - PAD, 18), where[:90], 9, DIM, anchor="ra")
-        if g and footer_route:
-            _text(d, (PAD, H - 12), f"To {g.dest_name}: {g.line1}"[:140], 9, FG, anchor="ls")
         if hint is None:
             hint = ("click  go there    " + ("drag / arrows scroll    wheel / +- zoom    " if home is not None else "")
                     + f"{KEYTEXT['labels']}  pin names {'off' if self.pin_labels else 'on'}    Esc  close")
         _text(d, (W - PAD, H - 12), hint, 9, DIM, anchor="rs")
+        if g and footer_route:     # the directions get whatever room the key help leaves
+            room = W - 3 * PAD - d.textlength(hint, font=font(9))
+            _text(d, (PAD, H - 12), fit_text(d, f"To {g.dest_name}: {g.line1}", 9, room), 9, FG, anchor="ls")
         if toast:
             color = TOAST_COLORS.get(toast[1], TOAST_COLORS["info"])
             tw = d.textlength(toast[0], font=font(10)) + 40
@@ -243,23 +258,51 @@ class FullMap:
         to_px.back = lambda px, py: ((px - ox) / s, (py - oy) / s)
         return to_px
 
-    def _route_points(self, snap, nav, P, to_px):
-        if not nav or not nav.plan:
-            pts = []
-        else:
-            pts = []
-            for t in nav.plan:
-                home, hx, hy = worldmap.home_of(self.world, t["from_area"])
-                if home is None:
-                    continue
-                wpt = self.world.to_world(home, *((t["from_x"], t["from_y"]) if hx is None else (hx, hy)))
-                pts.append(to_px(*P(*wpt)))
-        if nav and nav.goal_xy:
-            home, hx, hy = worldmap.home_of(self.world, nav.dest["area"])
-            if home is not None:
-                wpt = self.world.to_world(home, *(nav.goal_xy if hx is None else (hx, hy)))
-                pts.append(to_px(*P(*wpt)))
-        return pts
+    def _route_lines(self, cid, me, snap, nav, P, to_px):
+        """The route as drawn: {"lines": [[(x, y), ...], ...], "hops": [(x, y)], "goal": (x, y) or None}.
+        A line only joins places that are on this map and connected on foot: it stops at a
+        teleport or server portal (marked as a hop) and wherever the route leaves this map (a
+        place not on it, or another island), so it never cuts straight across areas it doesn't visit."""
+        out = {"lines": [], "hops": [], "goal": None}
+        if not nav:
+            return out
+
+        def spot(area, xy):
+            """Pixel position of (x, y) in `area` on this map, or None if it isn't on it."""
+            home, hx, hy = worldmap.home_of(self.world, area)
+            if home is None or self.world.cluster.get(home) != cid:
+                return None
+            return to_px(*P(*self.world.to_world(home, *(xy if hx is None else (hx, hy)))))
+
+        line = [me]
+
+        def end_line():
+            if len(line) > 1:
+                out["lines"].append(list(line))
+            line.clear()
+        for t in nav.plan or []:
+            start = spot(t["from_area"], (t["from_x"], t["from_y"]))
+            if start is None:
+                end_line()                   # leaving from somewhere not on this map
+            else:
+                line.append(start)
+                if (t.get("kind") or "walk") in ("portal", "jump"):
+                    out["hops"].append(start)
+                    end_line()
+            arrive = spot(t["to_area"], (t["to_x"], t["to_y"]))
+            if arrive is None:
+                end_line()
+            else:
+                line.append(arrive)          # (after a portal / unmapped stretch: a new line starts here)
+        goal = spot(nav.dest["area"], nav.goal_xy) if nav.goal_xy else None
+        if goal is not None:
+            if not line or line[-1] != goal:
+                line.append(goal)
+            out["goal"] = goal
+        elif not nav.goal_xy and nav.plan and len(line) > 1:
+            out["goal"] = line[-1]           # a whole area as destination: where you'll arrive in it
+        end_line()
+        return out
 
     def _area_only(self, img, snap, area_map_img, box):
         w_m, h_m = snap.size[0] * 10, snap.size[1] * 10

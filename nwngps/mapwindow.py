@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw
 
 from . import config, maps
 from .db import DATA_DIR, Store, db_name
-from .fullmap import FullMap, _text
+from .fullmap import FullMap, _text, fit_text
 from .hud import read_target, resolve_target, set_target
 from .nav import Navigator, compass
 from .panel import _arrow
@@ -190,13 +190,7 @@ def directions_bar(img, g, search_key):
 
 
 def fit(d, text, size, width, bold=False):
-    """text, shortened with '...' to fit width pixels."""
-    f = _font(size, bold)
-    if d.textlength(text, font=f) <= width:
-        return text
-    while text and d.textlength(text + "...", font=f) > width:
-        text = text[:-1]
-    return text.rstrip() + "..."
+    return fit_text(d, text, size, width, bold)
 
 
 def _font(size, bold=False):

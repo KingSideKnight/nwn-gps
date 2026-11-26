@@ -76,7 +76,8 @@ def cmd_route(store, args):
     print(f"To:   {dest['name']}  in {store.area_name(dest['area'])}")
     if len(hits) > 1:
         print(f"      (best of {len(hits)} matches; `find` lists them all)")
-    steps = R.plan(store.transitions(), start_area, start_pos, dest["area"], goal_xy)
+    steps = R.plan(store.transitions(), start_area, start_pos, dest["area"], goal_xy,
+                   places=store.exit_places())
     if steps is None:
         print("No known route yet. Explore more with the recorder running.")
         return

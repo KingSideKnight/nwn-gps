@@ -49,7 +49,7 @@ class Navigator:
         """Route graph, rebuilt only when the recorder has added or updated transitions."""
         version = self.store.links_version()
         if version != getattr(self, "_graph_version", None):
-            self._graph_index = R.edge_index(self.store.transitions())
+            self._graph_index = R.edge_index(self.store.transitions(), places=self.store.exit_places())
             self._graph_version = version
         return self._graph_index
 
@@ -80,7 +80,9 @@ class Navigator:
             dest_area = self.store.area_name(t["to_area"])
             hop = " (server transfer)" if t.get("kind") == "portal" else ""
             g.line1 = f"Take {self.label(t)} to {dest_area}{hop}"
-            if t.get("assumed"):
+            if t.get("ambiguous"):
+                g.line2 = f"This exit has led to different places: pick {dest_area} if asked"
+            elif t.get("assumed"):
                 g.line2 = "Way back assumed (not walked yet)"
             elif t.get("kind") == "jump":
                 g.line2 = "Teleport spot: use the portal / object here"

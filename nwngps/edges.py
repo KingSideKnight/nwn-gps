@@ -13,13 +13,17 @@ Teleport, died, or a DM moved you. Telling them apart:
            Never routed: "die here to get there" isn't directions.
   respawn  left a death area. Routed (it's how you get out), but no way back is assumed.
 
-The router assumes a way back only for walk and portal.
+The router assumes a way back only for walk and portal, and only when you came out next to a
+door, pin or map edge (natural_arrival): a portal that drops you mid-area has no way back there.
 """
 import math
 
 DOOR_NEAR = 4.0       # metres: real doors / transition pins were all within 2.6 m (Cordor, 15 links)
 EDGE_NEAR = 6.0       # metres: walking off the map edge (seen at 1.2 m)
 JUMP_CONFIRM = 3      # sightings from the same spot before a jump is trusted for routing
+ARRIVE_NEAR = 6.0     # metres: through a door or off the map edge you arrive this close to the way
+                      # back (every walked link seen: within 5 m); a portal or teleport that drops
+                      # you in the middle of an area (seen: 10 and 28 m) has no way back there
 
 KINDS = ("walk", "portal", "jump", "death", "respawn")
 REVERSIBLE = {"walk", "portal"}
@@ -46,6 +50,16 @@ def natural_exit(x, y, size_tiles, nearest_poi_dist):
         return True
     e = edge_distance(x, y, size_tiles)
     return e is not None and e <= EDGE_NEAR
+
+
+def natural_arrival(x, y, size_tiles, nearest_poi_dist):
+    """Did you come out next to a door / pin / the map edge, where a way back would be? None if we
+    can't tell (area size unknown and no doors or pins recorded there)."""
+    e = edge_distance(x, y, size_tiles)
+    if e is None and nearest_poi_dist is None:
+        return None
+    return ((nearest_poi_dist is not None and nearest_poi_dist <= ARRIVE_NEAR)
+            or (e is not None and e <= ARRIVE_NEAR))
 
 
 def classify(prev_area, prev_name, prev_pos, prev_size, prev_server,

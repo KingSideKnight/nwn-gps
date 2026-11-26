@@ -724,6 +724,17 @@ class Store:
             "LIMIT ?", (like, like, limit)).fetchall()
         return list(areas) + list(pois)
 
+    def exit_places(self):
+        """What the router needs to judge where you came out: {"pois": {area: [(x, y)]} (doors and
+        pins still there), "sizes": {area: (w, h) tiles}}."""
+        pois, sizes = {}, {}
+        for r in self.db.execute("SELECT area, x, y FROM pois WHERE retired IS NULL"):
+            pois.setdefault(r[0], []).append((r[1], r[2]))
+        for r in self.db.execute("SELECT resref, width, height FROM areas"):
+            if r[1] and r[2]:
+                sizes[r[0]] = (r[1], r[2])
+        return {"pois": pois, "sizes": sizes}
+
     def area_pois(self, area):
         """Current (not retired) pins, doors and your own markers in an area, for drawing."""
         return self.db.execute("SELECT kind,name,x,y FROM pois WHERE area=? AND retired IS NULL", (area,)).fetchall()
