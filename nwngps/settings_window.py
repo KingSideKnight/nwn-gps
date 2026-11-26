@@ -227,7 +227,7 @@ def main():
         row=row, column=0, columnspan=3, sticky="w", pady=(4, 0))
     row += 1
 
-    heading("Map window")
+    heading("Map window (experimental)")
     mapwin = tk.BooleanVar(value=bool(s.get("map_window")))
     ttk.Checkbutton(frm, text="Show the map in its own window", variable=mapwin).grid(
         row=row, column=0, columnspan=3, sticky="w")

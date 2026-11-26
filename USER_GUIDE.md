@@ -113,7 +113,7 @@ upgrading keeps them.
 | **Ctrl+Shift+G** | Hide / show the panel |
 | **Ctrl+Shift+E** | Export your map to share with friends |
 | **Ctrl+Shift+I** | Import maps friends sent you |
-| **Ctrl+Shift+W** | Map window on / off: the world map in its own window, e.g. on a second monitor (see [Map window](#map-window)) |
+| **Ctrl+Shift+W** | Map window on / off (experimental): the world map in its own window, e.g. on a second monitor (see [Map window](#map-window)) |
 | **Ctrl+Shift + drag** | Move the panel (it remembers where you put it) |
 | **Drag the small map** | Look around a big area. Let go and it glides back to following you; while you look elsewhere, a blue arrow on its edge points back to you. (Small areas already fit whole, so there's nothing to drag.) Clicks on the small map don't reach the game; clicks on the rest of the panel do |
 
@@ -126,6 +126,9 @@ the map straight away, and the panel guides you as usual. A click that turns int
 moves the map.
 
 ## Map window
+**Experimental:** it works, but it's new and hasn't been tried on many setups yet. If something
+looks wrong, please report it, with your monitor layout and `Documents\NWN GPS\logs\mapwindow.log`.
+
 The world map can also have a window of its own: on a second monitor, a TV, a tablet used as a
 screen, or beside the game if you play in a window. It's **off until you turn it on**, with
 **Ctrl+Shift+W** in the game or in Settings ("Map window"); the same key, its **Hide** button or
@@ -233,7 +236,7 @@ which works while NWN GPS isn't running too). There you can:
 - **Mapping:** death areas and DM mode (below).
 - **Folders:** the game folder and NWN user folder, if they weren't found by themselves. These
   apply the next time you start NWN GPS.
-- **Map window:** turn the [map window](#map-window) on or off.
+- **Map window:** turn the [map window](#map-window) on or off (experimental).
 - **Updates:** turn the daily update check on or off, or **Check now** (see
   [Updates](#updates)).
 

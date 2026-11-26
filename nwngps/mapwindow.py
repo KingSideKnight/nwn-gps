@@ -1,4 +1,4 @@
-"""Map window: the world map in a normal window you can put on any monitor (or beside a windowed
+"""Map window (experimental): the world map in a normal window you can put on any monitor (or beside a windowed
 game). It follows you, shows the directions, and a click on a place sets the destination for the
 in-game panel too.
 
@@ -374,7 +374,7 @@ class MapWindow:
         self.tk = tk
         self.worker = Worker()
         self.root = tk.Tk()
-        self.root.title("NWN GPS map")
+        self.root.title("NWN GPS map (experimental)")
         self.root.configure(bg="#0a0d10")
         self.root.minsize(MIN_W, MIN_H)
         self.root.withdraw()
