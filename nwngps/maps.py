@@ -9,6 +9,7 @@ rotated by the tile's orientation.
 import hashlib
 import io
 import json
+import os
 import re
 import struct
 
@@ -170,8 +171,13 @@ class Maps:
             raise ValueError(f"implausible area size {w}x{h} ({len(tiles)} tiles)")
         path = MAP_DIR / f"{self.key(tileset, w, h, tiles)}.png"
         if path.exists():
-            path.touch()                       # Windows doesn't always update access times: mark it used
-            return Image.open(path).convert("RGBA")
+            try:
+                with Image.open(path) as cached:
+                    img = cached.convert("RGBA")
+                path.touch()                   # Windows doesn't always update access times: mark it used
+                return img
+            except OSError:                    # damaged (e.g. an old half-written file): draw it again
+                pass
         ids = self.tileset(tileset)
         img = Image.new("RGBA", (w * TILE_PX, h * TILE_PX), (0, 0, 0, 0))
         missing = 0
@@ -184,5 +190,18 @@ class Maps:
             x, y = i % w, i // w
             img.paste(tex, (x * TILE_PX, (h - 1 - y) * TILE_PX))
         if missing < len(tiles):
-            img.save(path)
+            save_atomic(img, path)
         return img
+
+
+def save_atomic(img, path):
+    """Write the PNG under a temporary name, then swap it in, so the other GPS windows (which share
+    this cache) never open a half-written file. Losing the race just means the other copy stays."""
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp")
+    try:
+        img.save(tmp, format="PNG")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    finally:
+        tmp.unlink(missing_ok=True)
