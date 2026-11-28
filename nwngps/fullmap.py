@@ -7,7 +7,7 @@ import math
 from PIL import Image, ImageDraw
 
 from . import worldmap
-from .panel import KEYTEXT, TOAST_COLORS, _arrow, _dashed, display_pois, font
+from .panel import CASING, KEYTEXT, TOAST_COLORS, _arrow, _casing, _dashed, display_pois, font, map_colors
 
 BG = (10, 13, 16, 225)
 FG, DIM, ROUTE, ME, GOLD = (232, 238, 242, 255), (125, 138, 148, 255), (76, 217, 100, 255), \
@@ -171,20 +171,24 @@ class FullMap:
         else:                                              # area not linked yet: its own map
             title = "Area map (not linked to the world map yet)"
             me, route, inside = self._area_only(img, snap, area_map_img, box), None, None
-        # route + destination
+        # route + destination, in colours that stand out from the area you're in
+        route_c, me_c = map_colors(area_map_img)
         if route:
-            for line in route["lines"]:
+            for line in route["lines"]:                # (_dashed / _casing / _arrow work in SS=2 units)
+                _casing(d, [(x / 2, y / 2) for x, y in line], width=4)
                 for a, b in zip(line, line[1:]):
-                    _dashed(d, a[0] / 2, a[1] / 2, b[0] / 2, b[1] / 2, ROUTE)    # _dashed works in SS=2 units
+                    _dashed(d, a[0] / 2, a[1] / 2, b[0] / 2, b[1] / 2, route_c)
             for px, py in route["hops"]:               # teleport / server portal: the line stops here
-                d.ellipse((px - 7, py - 7, px + 7, py + 7), outline=ROUTE, width=2)
-                d.ellipse((px - 3, py - 3, px + 3, py + 3), fill=ROUTE)
+                d.ellipse((px - 7, py - 7, px + 7, py + 7), fill=CASING)
+                d.ellipse((px - 7, py - 7, px + 7, py + 7), outline=route_c, width=2)
+                d.ellipse((px - 3, py - 3, px + 3, py + 3), fill=route_c)
             if route["goal"]:
                 ex, ey = route["goal"]
-                d.ellipse((ex - 9, ey - 9, ex + 9, ey + 9), outline=ROUTE, width=3)
+                d.ellipse((ex - 10, ey - 10, ex + 10, ey + 10), outline=CASING, width=6)
+                d.ellipse((ex - 9, ey - 9, ex + 9, ey + 9), outline=route_c, width=3)
         fx, fy = (snap.facing or (0, 1, 0))[:2]
         if box[0] <= me[0] <= box[2] and box[1] <= me[1] <= box[3]:     # you may be scrolled out of view
-            _arrow(d, me[0] / 2, me[1] / 2, 9, math.degrees(math.atan2(fx, fy)), ME)
+            _arrow(d, me[0] / 2, me[1] / 2, 10, math.degrees(math.atan2(fx, fy)), me_c, outline=CASING)
         # header / footer
         _text(d, (PAD, 16), title, 13, FG, bold=True)
         where = snap.area_name or ""

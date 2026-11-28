@@ -25,6 +25,66 @@ PIN, DOOR, ME, ROUTE = (242, 201, 76, 255), (176, 122, 74, 255), (63, 193, 255, 
 MAP_BG, MAP_EDGE, GRID = (24, 32, 39, 230), (42, 54, 64, 255), (30, 40, 48, 255)
 ACCENT_RGBA = (63, 193, 255, 255)
 _scaled = {}     # last scaled tile map (scaling every frame is wasted work)
+CASING = (8, 10, 12, 190)        # dark edge under the route line and around your arrow: readable on any tiles
+# Bright colours for the route and your arrow, picked per area to stand out from its tile art. Gold
+# and brown are left out: map pins and doors use them.
+ROUTE_COLORS = [ROUTE, (255, 70, 200, 255), (0, 229, 255, 255), (255, 120, 40, 255), (190, 130, 255, 255)]
+ME_COLORS = [ME, (255, 255, 255, 255), (255, 70, 200, 255), (0, 229, 255, 255), (255, 120, 40, 255)]
+DEFAULT_BONUS = 5                # Lab: a slight lean to the usual colours when it's close
+MIN_APART = 40                   # Lab difference your arrow keeps from the route colour
+CLOSE, CLOSE_PENALTY = 25, 10    # each 1% of the art within CLOSE (Lab) of a colour costs it this much
+_colors = {}
+
+
+def _lab(rgb):
+    """sRGB (N x 3, 0-255) -> CIE Lab, where plain distances match how different colours look."""
+    import numpy as np
+    c = np.asarray(rgb, dtype=float) / 255.0
+    c = np.where(c > 0.04045, ((c + 0.055) / 1.055) ** 2.4, c / 12.92)
+    xyz = c @ np.array([[0.4124, 0.2126, 0.0193], [0.3576, 0.7152, 0.1192], [0.1805, 0.0722, 0.9505]])
+    xyz /= np.array([0.9505, 1.0, 1.089])
+    f = np.where(xyz > 0.008856, np.cbrt(xyz), 7.787 * xyz + 16 / 116)
+    return np.stack([116 * f[:, 1] - 16, 500 * (f[:, 0] - f[:, 1]), 200 * (f[:, 1] - f[:, 2])], axis=1)
+
+
+def _separation(lab, color):
+    """How well `color` stands out from the map (its pixels in Lab): the colour difference that
+    only the closest 15% of them get under, less a penalty for every bit of the art that is nearly
+    that colour (door icons, water, lava: small but eye-catching)."""
+    import numpy as np
+    dist = np.linalg.norm(lab - _lab([color[:3]])[0], axis=1)
+    return float(np.percentile(dist, 15)) - CLOSE_PENALTY * float((dist < CLOSE).mean()) * 100
+
+
+def map_colors(map_img):
+    """(route colour, your-arrow colour) that stand out best against this area's tile art.
+    Without a map (or numpy): the usual green and blue."""
+    if map_img is None:
+        return ROUTE, ME
+    if _colors.get("img") is map_img:
+        return _colors["pick"]
+    pick = ROUTE, ME
+    try:
+        import numpy as np
+        f = max(1, max(map_img.size) // 256)             # nearest-neighbour: keep small icons' true colour
+        small = map_img.convert("RGBA").resize((max(1, map_img.width // f), max(1, map_img.height // f)),
+                                               Image.NEAREST)
+        px = np.asarray(small, dtype=float).reshape(-1, 4)
+        px = _lab(px[px[:, 3] > 128][:, :3])
+        if len(px) >= 64:
+            def best(options, avoid=None):
+                def score(c):
+                    s = _separation(px, c) + (DEFAULT_BONUS if c == options[0] else 0)
+                    if avoid is not None and _separation(_lab([avoid[:3]]), c) < MIN_APART:
+                        s -= 1000                          # too like the route line to tell apart
+                    return s
+                return max(options, key=score)
+            route = best(ROUTE_COLORS)
+            pick = route, best([c for c in ME_COLORS if c != route], avoid=route)
+    except Exception:              # colours are cosmetic: never break the panel over them
+        pass
+    _colors.update(img=map_img, pick=pick)
+    return pick
 
 
 @lru_cache(maxsize=16)
@@ -37,12 +97,15 @@ def font(size, bold=False):
     return ImageFont.load_default()
 
 
-def _arrow(d, cx, cy, r, deg, color):
+def _arrow(d, cx, cy, r, deg, color, outline=None):
     a = math.radians(deg)
     pts = []
     for px, py in ((0, -r), (r * 0.6, r * 0.7), (0, r * 0.35), (-r * 0.6, r * 0.7)):
         pts.append(((cx + px * math.cos(a) - py * math.sin(a)) * SS, (cy + px * math.sin(a) + py * math.cos(a)) * SS))
-    d.polygon(pts, fill=color)
+    if outline:
+        d.polygon(pts, fill=color, outline=outline, width=SS)
+    else:
+        d.polygon(pts, fill=color)
 
 
 KEY_BG, KEY_EDGE = (34, 44, 54, 255), (70, 86, 100, 255)
@@ -405,10 +468,11 @@ def _map(img, d, s, g, pois, area_size, map_img=None, pan=(0, 0)):
             _map_label(ld, px, py, p["name"], side, PIN)
         else:
             ld.rectangle(((px - 2) * SS, (py - 2) * SS, (px + 2) * SS, (py + 2) * SS), fill=DOOR)
-    _route_and_player(ld, s, g, pois, P)
+    route_c, me_c = map_colors(map_img if has_art else None)
+    _route_and_player(ld, s, g, pois, P, route_c, me_c)
     mx, my = P(*s.pos[:2])
     if not (0 <= mx <= side and 0 <= my <= side):
-        _edge_pointer(ld, mx, my, side, ME, size=1.6)   # looking elsewhere: this way back to you
+        _edge_pointer(ld, mx, my, side, me_c, size=1.6)   # looking elsewhere: this way back to you
     ox, oy = MAP_RECT[0], MAP_RECT[1]
     img.alpha_composite(layer, (ox * SS, oy * SS))
     d.rectangle((ox * SS, oy * SS, (ox + side) * SS, (oy + side) * SS), outline=MAP_EDGE, width=SS)
@@ -431,7 +495,7 @@ def _edge_pointer(d, px, py, side, color=PIN, size=1.0):
     d.polygon([(x * SS, y * SS) for x, y in (tip, *back)], fill=color, outline=(0, 0, 0, 220))
 
 
-def _route_and_player(d, s, g, pois, P):
+def _route_and_player(d, s, g, pois, P, route_c=ROUTE, me_c=ME):
     mx, my = P(*s.pos[:2])
     if g and g.target:
         target = g.target
@@ -442,11 +506,20 @@ def _route_and_player(d, s, g, pois, P):
                 target = (near["x"], near["y"])
         tx, ty = P(*target)
         line = [(mx, my)] + [P(*p) for p in (g.path or [])[1:-1]] + [(tx, ty)]   # on foot, else straight
+        _casing(d, line)
         for (ax, ay), (bx, by) in zip(line, line[1:]):
-            _dashed(d, ax, ay, bx, by, ROUTE)
-        d.ellipse(((tx - 7) * SS, (ty - 7) * SS, (tx + 7) * SS, (ty + 7) * SS), outline=ROUTE, width=2 * SS)
+            _dashed(d, ax, ay, bx, by, route_c)
+        ring = ((tx - 7) * SS, (ty - 7) * SS, (tx + 7) * SS, (ty + 7) * SS)
+        d.ellipse(ring, outline=CASING, width=4 * SS)
+        d.ellipse(ring, outline=route_c, width=2 * SS)
     fx, fy = (s.facing or (0, 1, 0))[:2]
-    _arrow(d, mx, my, 8, math.degrees(math.atan2(fx, fy)), ME)
+    _arrow(d, mx, my, 9, math.degrees(math.atan2(fx, fy)), me_c, outline=CASING)
+
+
+def _casing(d, line, width=5):
+    """A dark band under a route line, so its dashes read on light and dark tiles alike."""
+    if len(line) > 1:
+        d.line([(x * SS, y * SS) for x, y in line], fill=CASING, width=width * SS, joint="curve")
 
 
 def _dashed(d, x0, y0, x1, y1, color, dash=4, gap=3):
