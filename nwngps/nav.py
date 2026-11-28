@@ -12,6 +12,8 @@ from . import route as R
 
 ARRIVE_DIST = 4.0      # metres from the destination counts as arrived
 REPLAN_EVERY = 3.0     # seconds
+SWITCH_MIN, SWITCH_SHARE = 20.0, 0.10   # a new route must be this much shorter (metres, share) to switch to it
+FILL_AREAS = 200       # areas (nearest first) whose walking distances are worked out in the background
 
 
 def bearing(dx, dy):
@@ -53,11 +55,88 @@ class Navigator:
         if version != getattr(self, "_graph_version", None):
             self._graph_index = R.edge_index(self.store.transitions(), places=self.store.exit_places())
             self._graph_version = version
+            arrivals = {}
+            for edges in self._graph_index.values():
+                for t in edges:
+                    arrivals.setdefault(t["to_area"], set()).add((t["to_x"], t["to_y"]))
+            self._arrivals = arrivals
         return self._graph_index
 
+    def _walk(self, area, frm, to, first):
+        """Metres on foot inside an area, if worked out yet (see route.leg)."""
+        return self.paths.here_cost(area, to) if first else self.paths.cost(area, frm, to)
+
+    def _targets(self, area, index):
+        out = [(t["from_x"], t["from_y"]) for t in index.get(area, ())]
+        if area == self.dest["area"] and self.goal_xy:
+            out.append(self.goal_xy)
+        return out
+
+    def _feed(self, snap, index, plan):
+        """Ask for the walking distances routing needs: from you to this area's exits, then (in the
+        background) between the exits of the areas on the route, then of the areas nearest you."""
+        self.paths.want_here(snap.area, snap.pos[:2], self._targets(snap.area, index))
+        on_route = [t["to_area"] for t in plan or ()]
+        key = (snap.area, self._graph_version, tuple(on_route))
+        if key == getattr(self, "_fed", None):
+            return
+        self._fed = key
+        order, seen = [], set()
+        for area in [snap.area] + on_route:
+            if area not in seen:
+                seen.add(area)
+                order.append(area)
+        frontier = [snap.area]
+        while frontier and len(seen) < FILL_AREAS:          # then the areas nearest you, a hop at a time
+            nxt = []
+            for area in frontier:
+                for t in index.get(area, ()):
+                    if t["to_area"] not in seen and len(seen) < FILL_AREAS:
+                        seen.add(t["to_area"])
+                        order.append(t["to_area"])
+                        nxt.append(t["to_area"])
+            frontier = nxt
+        jobs = []
+        for area in order:
+            sources = self._arrivals.get(area, ())
+            targets = self._targets(area, index)
+            if sources and targets:
+                jobs.append((area, self.store.tiles(area), sources, targets))
+        self.paths.want_distances(jobs)
+
+    def _carried_on(self, snap, index):
+        """The route we were following, from where you are now (or None)."""
+        old = self.plan
+        if not old:
+            return None
+        if self.plan_area != snap.area:
+            if old[0]["to_area"] != snap.area:
+                return None
+            old = old[1:]                                    # you took its first exit
+        if not all(t in index.get(t["from_area"], ()) for t in old):
+            return None                                      # the map changed under it
+        return old
+
     def _replan(self, snap):
-        self.plan = R.plan(None, snap.area, snap.pos[:2], self.dest["area"], self.goal_xy, index=self._graph())
+        index = self._graph()
+        walk = self._walk if self.paths else None
+        new = R.plan(None, snap.area, snap.pos[:2], self.dest["area"], self.goal_xy, index=index, walk=walk)
+        old = self._carried_on(snap, index) if getattr(self, "_informed", False) else None
+        if new is not None and old is not None and new != old:
+            # only switch to a clearly shorter route, so near-equal ones don't take turns
+            pos = snap.pos[:2]
+            c_new = R.route_cost(new, snap.area, pos, self.goal_xy, walk)
+            c_old = R.route_cost(old, snap.area, pos, self.goal_xy, walk)
+            if c_new is not None and c_old is not None and c_new > c_old - max(SWITCH_MIN, SWITCH_SHARE * c_old):
+                new = old
+        self.plan = new
         self.plan_area, self.plan_t = snap.area, time.time()
+        # A first guess (made before the walking distance from you was known) may still change freely.
+        first = new[0] if new else None
+        self._informed = (not self.paths or first is None
+                          or self.paths.here_cost(snap.area, (first["from_x"], first["from_y"])) is not None)
+        if self.paths:
+            self._feed(snap, index, new)
 
     def label(self, t):
         via = self.store.poi(t["via_poi"]) if t.get("via_poi") else \

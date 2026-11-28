@@ -1,8 +1,9 @@
 """Shortest route between areas over recorded transitions.
 
 Nodes are (area, x, y) points where you are standing; from a point you can walk
-to any recorded exit in the same area (cost = straight-line distance) and take
-it (cost = LOAD_COST, arriving at the recorded entry point of the next area).
+to any recorded exit in the same area (cost = the distance on foot where it's known,
+else the straight line) and take it (cost = LOAD_COST, arriving at the recorded entry
+point of the next area).
 """
 import heapq
 import math
@@ -14,6 +15,7 @@ REVERSE_COST = 30.0   # extra penalty for an assumed (never walked) reverse edge
 REVERSE_NEAR = 8.0    # a recorded edge this close to the arrival point already covers the way back
 AMBIGUOUS_COST = 400.0   # metres-equivalent: an exit that has led to different areas is a last resort
 SAME_SPOT = 2.0       # metres: exits without a known object this close count as the same exit
+NO_WAY_COST = 300.0   # metres-equivalent: no way on foot inside the area (the tiles may be wrong: last resort)
 
 
 def kind_of(t):
@@ -102,9 +104,42 @@ def edge_index(transitions, assume_reverse=True, places=None):
     return by_area
 
 
-def plan(transitions, start_area, start_xy, goal_area, goal_xy=None, assume_reverse=True, index=None, places=None):
+def leg(walk, area, frm, to, first):
+    """Metres from frm to to inside `area`: on foot if `walk` knows (walk(area, frm, to, first)
+    -> metres, math.inf for no way, or None), else the straight line."""
+    straight = math.hypot(to[0] - frm[0], to[1] - frm[1])
+    d = walk(area, frm, to, first) if walk else None
+    if d is None:
+        return straight
+    if d == math.inf:
+        return straight + NO_WAY_COST
+    return max(d, straight)
+
+
+def step_cost(t):
+    """The cost of taking exit t itself (a loading screen, plus doubts about it)."""
+    return LOAD_COST + (REVERSE_COST if t.get("assumed") else 0.0) + (AMBIGUOUS_COST if t.get("ambiguous") else 0.0)
+
+
+def route_cost(steps, start_area, start_xy, goal_xy=None, walk=None):
+    """What plan() would count for following `steps` from start: legs on foot, exits, and the
+    last leg to goal_xy."""
+    area, here, first, total = start_area, (start_xy[0], start_xy[1]), True, 0.0
+    for t in steps:
+        if t["from_area"] != area:
+            return None                       # not a route from here
+        total += leg(walk, area, here, (t["from_x"], t["from_y"]), first) + step_cost(t)
+        area, here, first = t["to_area"], (round(t["to_x"], 1), round(t["to_y"], 1)), False
+    if goal_xy:
+        total += leg(walk, area, here, goal_xy, first)
+    return total
+
+
+def plan(transitions, start_area, start_xy, goal_area, goal_xy=None, assume_reverse=True, index=None, places=None,
+         walk=None):
     """Return list of transition rows (dicts) to follow, or None if unreachable.
-    Pass `index` (from edge_index) to skip rebuilding the graph."""
+    Pass `index` (from edge_index) to skip rebuilding the graph, and `walk` (see leg()) for
+    distances on foot."""
     by_area = index if index is not None else edge_index(transitions, assume_reverse, places)
 
     start = (start_area, round(start_xy[0], 1), round(start_xy[1], 1))
@@ -117,8 +152,9 @@ def plan(transitions, start_area, start_xy, goal_area, goal_xy=None, assume_reve
         if cost > best.get(node, math.inf):
             continue
         area, x, y = node
+        first = node == start
         if area == goal_area:
-            extra = math.hypot(goal_xy[0] - x, goal_xy[1] - y) if goal_xy else 0.0
+            extra = leg(walk, area, (x, y), goal_xy, first) if goal_xy else 0.0
             if final is None or cost + extra < final[0]:
                 final = (cost + extra, node)
             continue
@@ -126,8 +162,7 @@ def plan(transitions, start_area, start_xy, goal_area, goal_xy=None, assume_reve
             break
         for t in by_area.get(area, []):
             nxt = (t["to_area"], round(t["to_x"], 1), round(t["to_y"], 1))
-            c = (cost + math.hypot(t["from_x"] - x, t["from_y"] - y) + LOAD_COST
-                 + (REVERSE_COST if t.get("assumed") else 0.0) + (AMBIGUOUS_COST if t.get("ambiguous") else 0.0))
+            c = cost + leg(walk, area, (x, y), (t["from_x"], t["from_y"]), first) + step_cost(t)
             if c < best.get(nxt, math.inf):
                 best[nxt] = c
                 prev[nxt] = (node, t)

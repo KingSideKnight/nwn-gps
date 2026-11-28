@@ -215,6 +215,12 @@ It doesn't know about furniture, crates or people (they aren't part of the tiles
 odd small detour, and a locked door looks like an open doorway. Where an area's tiles can't be
 read, directions fall back to a straight line.
 
+**Choosing between ways works on foot too.** When there's more than one way to your destination,
+NWN GPS compares how far each one is to walk, not just how far apart the doors are. It works these
+distances out in the background, starting with the areas around you, and keeps them for next time.
+Once you're on a route it sticks with it unless another one is clearly shorter, so it won't keep
+switching between two ways that are about the same.
+
 On the maps, the route line follows the areas you'll walk through. It stops at a portal or
 teleport (drawn as a ringed dot) and picks up again where you come out, rather than cutting
 straight across the map.

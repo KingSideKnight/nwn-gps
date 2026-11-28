@@ -119,7 +119,13 @@ Unofficial fan-made tool, not affiliated with Wizards of the Coast, Beamdog or a
   beside the map PNGs. `Paths` runs A* (no corner cutting, then string-pulled to a few turns) on
   its own thread; `Navigator` takes the result for the arrow (next turn) and distance (on foot) and
   falls back to a straight line without one. Server content is capped and validated; an area with
-  mostly unreadable walkmeshes gets no grid (`tests/test_walkmesh.py`).
+  mostly unreadable walkmeshes gets no grid (`tests/test_walkmesh.py`). For choosing routes,
+  `walkmesh.distances` measures one point to all of an area's exits in a single search; `Paths`
+  fills those tables in the background (areas on the route first, then nearest by hops, saved as
+  `<map key>.walkdist1`), `route.plan(walk=...)` uses them, and `Navigator` keeps the current route
+  unless another is at least 20 m / 10% shorter (`tests/test_walk_routes.py`). Long searches hand
+  the GIL back every 512 cells: on Windows a waiting thread can otherwise lose a 15.6 ms timer tick
+  per database call.
 - **Map window (experimental):** `mapwindow.py` is a third launcher part, idle until `"map_window"` is on
   (Ctrl+Shift+W = `EV_WINDOW`, DLL v6, flips it in settings.json). A worker thread with its own
   read-only `Session` and `Store` draws `FullMap` frames; tkinter only shows them. The window is
