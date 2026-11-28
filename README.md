@@ -5,7 +5,7 @@ play, finds any place you (or your friends) have been, and guides you there with
 an arrow, the distance on foot, the next step and a live map of the area. Works in fullscreen.
 
 <p align="center">
-  <img src="docs/images/panel-sewers.png" alt="The in-game panel guiding through sewer tunnels" width="300">
+  <img src="docs/images/panel-underpassages.png" alt="The in-game panel routing through winding underground passages" width="300">
   &nbsp;
   <img src="docs/images/panel-city.png" alt="The in-game panel routing around buildings in a city" width="300">
 </p>
