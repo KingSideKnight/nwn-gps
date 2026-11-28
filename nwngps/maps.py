@@ -59,8 +59,10 @@ CACHE_MAX_BYTES = 300 * 1024 * 1024    # cached area images are rebuilt on deman
 
 
 def prune_cache(max_bytes=CACHE_MAX_BYTES):
-    """Delete least-recently-used cached map images until the folder fits in max_bytes."""
-    files = sorted(MAP_DIR.glob("*.png"), key=lambda p: max(p.stat().st_atime, p.stat().st_mtime))
+    """Delete least-recently-used cached map images (and walkable grids) until the folder fits in
+    max_bytes."""
+    files = [p for p in MAP_DIR.iterdir() if p.suffix == ".png" or p.suffix.startswith(".walk")]
+    files.sort(key=lambda p: max(p.stat().st_atime, p.stat().st_mtime))
     total = sum(p.stat().st_size for p in files)
     removed = 0
     for p in files:
@@ -99,17 +101,23 @@ def parse_set(text):
     return out
 
 
-def area_image(maps, store, mem, snap, log=print):
+def area_layout(store, mem, snap):
+    """(tileset, w, h, tiles) of the area you're in (from live memory, else the recorded layout),
+    or None."""
+    tiles = read_tiles(mem, snap.area_ptr, *snap.size) if (snap.size and mem) else None
+    if tiles:
+        return (snap.tileset, *snap.size, tiles)
+    return store.tiles(snap.area)
+
+
+def area_image(maps, store, mem, snap, log=print, layout=None):
     """Tile-art map of the area you're in (from live memory, else the recorded layout), or None."""
     import time
     try:
-        tiles = read_tiles(mem, snap.area_ptr, *snap.size) if (snap.size and mem) else None
-        tileset, w, h = snap.tileset, *(snap.size or (0, 0))
-        if not tiles:
-            rec = store.tiles(snap.area)
-            if not rec:
-                return None
-            tileset, w, h, tiles = rec
+        layout = layout or area_layout(store, mem, snap)
+        if not layout:
+            return None
+        tileset, w, h, tiles = layout
         t0 = time.time()
         img = maps.image(tileset, w, h, tiles)
         log(f"map: {snap.area_name} ({w}x{h} {tileset}) in {time.time() - t0:.2f}s")

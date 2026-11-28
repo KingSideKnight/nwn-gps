@@ -20,7 +20,7 @@ import time
 
 from PIL import Image, ImageDraw
 
-from . import config, maps
+from . import config, maps, walkmesh
 from .db import DATA_DIR, Store, db_name
 from .fullmap import FullMap, _text, fit_text
 from .hud import read_target, resolve_target, set_target
@@ -220,6 +220,7 @@ class Worker(threading.Thread):
         self.pid = None
         self.session, self.store, self.maps, self.fm = None, None, None, None
         self.nav, self.target, self.area, self.area_img, self.nwsync_host = None, object(), None, None, None
+        self.paths = walkmesh.Paths(log)
         self.last_key, self.redraw = None, True
         self.pin_labels = True
         self.inputs_status = None          # a message for the window's status line
@@ -327,16 +328,22 @@ class Worker(threading.Thread):
         if tgt != self.target:
             self.target = tgt
             dest = resolve_target(self.store, tgt)
-            self.nav = Navigator(self.store, dest) if dest else None
+            self.nav = Navigator(self.store, dest, self.paths) if dest else None
         if snap.area != self.area:
             self.area = snap.area
-            self.area_img = maps.area_image(self.maps, self.store, self.session.mem, snap, log)
+            try:
+                layout = maps.area_layout(self.store, self.session.mem, snap)
+            except Exception as e:
+                log(f"no tile layout for {snap.area}: {e!r}")
+                layout = None
+            self.paths.set_area(snap.area, layout, self.nwsync_host)
+            self.area_img = maps.area_image(self.maps, self.store, self.session.mem, snap, log, layout=layout)
         g = self.nav.update(snap) if self.nav else None
         data = self.fm.refresh()
         key = ("map", size, data, self.store.places_version(), self.fm.view_key(), self.fm.pin_labels, snap.area, self.search_key,
                tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
-               (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)
+               (g.status, g.line1, g.line2, round(g.distance or 0), g.target, len(g.path or ())) if g else None)
 
         def draw():
             img = Image.new("RGBA", size, BG)

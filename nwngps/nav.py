@@ -36,12 +36,14 @@ class Guidance:
     step: int = 0
     steps: int = 0
     route_exits: list = field(default_factory=list)   # exits in the current area that are on the route
+    path: list = None                # the way on foot to target: [(x, y), ...] from you (None: straight line)
 
 
 class Navigator:
-    def __init__(self, store, dest):
-        """dest: row from Store.search() (kind, area, name, x, y)."""
-        self.store, self.dest = store, dest
+    def __init__(self, store, dest, paths=None):
+        """dest: row from Store.search() (kind, area, name, x, y). paths: a walkmesh.Paths for
+        the way on foot inside the area you're in (else straight lines)."""
+        self.store, self.dest, self.paths = store, dest, paths
         self.goal_xy = (dest["x"], dest["y"]) if dest["x"] is not None else None
         self.plan, self.plan_area, self.plan_t = None, None, 0.0
 
@@ -105,6 +107,10 @@ class Navigator:
             g.status, g.line1, g.line2 = "ARRIVED", f"Arrived: {self.dest['name']}", ""
             return g
         g.status = "NAV"
+        walk = self.paths.walk(snap.area, (x, y), g.target) if self.paths else None
+        if walk:                         # on foot: head for the next turn; the distance is walking
+            g.path, g.distance = walk.points, walk.length
+            dx, dy = walk.aim[0] - x, walk.aim[1] - y
         g.bearing = bearing(dx, dy)
         if snap.facing and (snap.facing[0] or snap.facing[1]):
             facing = bearing(snap.facing[0], snap.facing[1])

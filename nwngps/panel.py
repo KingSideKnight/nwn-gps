@@ -441,7 +441,9 @@ def _route_and_player(d, s, g, pois, P):
             if math.hypot(near["x"] - target[0], near["y"] - target[1]) <= PIN_SNAP_DIST:
                 target = (near["x"], near["y"])
         tx, ty = P(*target)
-        _dashed(d, mx, my, tx, ty, ROUTE)
+        line = [(mx, my)] + [P(*p) for p in (g.path or [])[1:-1]] + [(tx, ty)]   # on foot, else straight
+        for (ax, ay), (bx, by) in zip(line, line[1:]):
+            _dashed(d, ax, ay, bx, by, ROUTE)
         d.ellipse(((tx - 7) * SS, (ty - 7) * SS, (tx + 7) * SS, (ty + 7) * SS), outline=ROUTE, width=2 * SS)
     fx, fy = (s.facing or (0, 1, 0))[:2]
     _arrow(d, mx, my, 8, math.degrees(math.atan2(fx, fy)), ME)

@@ -32,7 +32,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import maps, panel
+from . import maps, panel, walkmesh
 from .resources import Resources
 from .db import DATA_DIR, Store
 from .hud import read_target, resolve_target, set_target
@@ -339,6 +339,7 @@ class InGame:
         self.visible = True
         self.arrived_at = None
         self.maps, self.map_img = None, None
+        self.paths = walkmesh.Paths(log)        # the way on foot inside the area you're in
         self.fullmap, self.fullmap_r, self.last_img = False, None, None
         self.pin_labels = load_ui().get("pin_labels", True) is not False
         self.map_input = (0, 0, 0)            # last drag / wheel totals seen from the DLL
@@ -634,14 +635,21 @@ class InGame:
         self.apply_flags()
 
     def area_map(self, snap):
-        """Tile-art map of the current area (from live memory, else the recorded layout)."""
+        """Tile-art map of the current area (from live memory, else the recorded layout); also
+        tells the path finder which area you're in."""
+        try:
+            layout = maps.area_layout(self.store, self.session.mem, snap)
+        except Exception as e:
+            log(f"no tile layout for {snap.area}: {e!r}")
+            layout = None
+        self.paths.set_area(snap.area, layout, self.nwsync_host)
         try:
             if self.maps is None:
                 self.maps = maps.Maps(Resources(self.nwsync_host))
         except Exception as e:
             log(f"map unavailable for {snap.area}: {e!r}")
             return None
-        return maps.area_image(self.maps, self.store, self.session.mem, snap, log)
+        return maps.area_image(self.maps, self.store, self.session.mem, snap, log, layout=layout)
 
     def auto_clear(self, g):
         """Clear the destination once you've been there for a few seconds."""
@@ -660,7 +668,7 @@ class InGame:
         if tgt != self.target:
             self.target = tgt
             dest = resolve_target(self.store, tgt)
-            self.nav = Navigator(self.store, dest) if dest else None
+            self.nav = Navigator(self.store, dest, self.paths) if dest else None
             log(f"destination: {dest['name']} in {self.store.area_name(dest['area'])}" if dest
                 else "destination cleared")
 
@@ -724,7 +732,8 @@ class InGame:
             key = (full, data, full and self.store.places_version(), self.pin_labels, full and self.fullmap_r and self.fullmap_r.view_key(), toast, self.inbox_n, snap.state, snap.area, len(self.pois),
                    tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                    tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
-                   (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None, pan)
+                   (g.status, g.line1, g.line2, round(g.distance or 0), g.target, len(g.path or ())) if g else None,
+                   pan)
         if key != self.last_key:
             if self.picker.open:
                 img = panel.render_picker(self.picker, self.store.area_name)

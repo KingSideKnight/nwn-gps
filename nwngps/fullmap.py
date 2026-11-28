@@ -160,7 +160,7 @@ class FullMap:
                               "spot": self._world_spot(cid, P, box)}
             to_px = lambda x, y: (box[0] + x, box[1] + y)       # noqa: E731
             me = to_px(*P(*here))
-            route = self._route_lines(cid, me, snap, nav, P, to_px)
+            route = self._route_lines(cid, me, snap, nav, P, to_px, g)
             inside = None if hx is None else snap.area_name
             if self.center is not None:
                 _text(d, (box[2] - 8, box[3] - 8), f"{view[2] - view[0]:.0f} m view - {self.back_hint}", 8,
@@ -258,7 +258,7 @@ class FullMap:
         to_px.back = lambda px, py: ((px - ox) / s, (py - oy) / s)
         return to_px
 
-    def _route_lines(self, cid, me, snap, nav, P, to_px):
+    def _route_lines(self, cid, me, snap, nav, P, to_px, g=None):
         """The route as drawn: {"lines": [[(x, y), ...], ...], "hops": [(x, y)], "goal": (x, y) or None}.
         A line only joins places that are on this map and connected on foot: it stops at a
         teleport or server portal (marked as a hop) and wherever the route leaves this map (a
@@ -275,6 +275,9 @@ class FullMap:
             return to_px(*P(*self.world.to_world(home, *(xy if hx is None else (hx, hy)))))
 
         line = [me]
+        if g and g.path and worldmap.home_of(self.world, snap.area)[1] is None:
+            # the way on foot to the next exit (an area shown only at its door has no room for it)
+            line += [p for p in (spot(snap.area, xy) for xy in g.path[1:-1]) if p is not None]
 
         def end_line():
             if len(line) > 1:

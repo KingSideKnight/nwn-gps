@@ -207,6 +207,14 @@ moved you, so NWN GPS judges each area change by where you were standing when it
   middle of an area (say, the way out of a plane you teleported into) never becomes a way in.
 
 Teleports and deaths never move areas around on the world map; only walked exits place areas.
+**Inside the area you're in, directions follow the ground.** The tiles' own walkmeshes say where
+you can walk, so the route goes along streets, corridors and doorways instead of through walls and
+water. The arrow points at the next turn, and the distance is how far it is on foot. The first
+time you enter an area it takes a moment (about a second) to work out; after that it's instant.
+It doesn't know about furniture, crates or people (they aren't part of the tiles), so expect the
+odd small detour, and a locked door looks like an open doorway. Where an area's tiles can't be
+read, directions fall back to a straight line.
+
 On the maps, the route line follows the areas you'll walk through. It stops at a portal or
 teleport (drawn as a ringed dot) and picks up again where you come out, rather than cutting
 straight across the map.

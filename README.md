@@ -25,6 +25,12 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
   random worlds never overlap). Dragging the panel's mini map pans it (DLL v5 writes the drag to
   `panel_drag_*`; `ingame.MapPan` glides it back on release). Clicks on the full map arrive as `EV_MAPCLICK`
   events and are hit-tested against what the last frame drew (`FullMap.pick_at`).
+- **Walking paths:** `walkmesh.py` lays out each tile's walkmesh (.wok, restype 2016; walkable
+  materials from surfacemat.2da) like the tile art into a 0.5 m grid, cached as `<map key>.walk1`
+  beside the map PNGs. `Paths` runs A* (no corner cutting, then string-pulled to a few turns) on
+  its own thread; `Navigator` takes the result for the arrow (next turn) and distance (on foot) and
+  falls back to a straight line without one. Server content is capped and validated; an area with
+  mostly unreadable walkmeshes gets no grid (`tests/test_walkmesh.py`).
 - **Map window (experimental):** `mapwindow.py` is a third launcher part, idle until `"map_window"` is on
   (Ctrl+Shift+W = `EV_WINDOW`, DLL v6, flips it in settings.json). A worker thread with its own
   read-only `Session` and `Store` draws `FullMap` frames; tkinter only shows them. The window is
@@ -41,7 +47,7 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
 
 ## Run from source
     native\build.cmd                  # once (Visual Studio 2022 C++ tools)
-    python -m pip install pillow
+    python -m pip install pillow numpy
     python -m nwngps                  # launcher: recorder + in-game GPS (or start_gps.cmd)
     python -m nwngps cli --help       # search, routes, export/merge, world map
     python -m unittest discover -s tests
@@ -53,7 +59,7 @@ from `<app folder>\runtime`, falling back to `Documents\NWN GPS\runtime`.
 Why not AppData: processes started from a packaged (MSIX) Windows app, such as a terminal inside one,
 get AppData silently redirected to a private per-app copy. Data, logs and the DLL written there are
 invisible to the same tool started from Explorer, and to the game. `pip install --user` is affected
-the same way, so install Pillow system-wide or use the packaged exe.
+the same way, so install Pillow and numpy system-wide or use the packaged exe.
 
 Scale (synthetic, `recon/scale_test.py 3888`): 5,125 areas (3,844 placed on one map, 1,281 interiors),
 192,200 POIs, 12,627 transitions = 35 MB; search 4 ms, whole-world route 155 ms, full-screen map
