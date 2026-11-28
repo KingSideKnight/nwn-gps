@@ -36,7 +36,7 @@ class Merge(unittest.TestCase):
         t.close()
         added = m.merge(self.dir / "theirs.sqlite")
         self.assertEqual(added, {"areas": 1, "areas_updated": 1, "pois": 1, "transitions": 1,
-                                 "transitions_seen_again": 1, "tile_layouts": 1, "gone_skipped": 0,
+                                 "transitions_seen_again": 1, "tile_layouts": 1, "gone_skipped": 0, "places_skipped": 0,
                              "rejected": 0, "import_id": 1})
         self.assertEqual((m.area("a1")["width"], m.area("a1")["visits"]), (10, 1))   # filled, my visits kept
         self.assertEqual(m.stats(), {"areas": 3, "pois": 2, "transitions": 2})

@@ -94,37 +94,110 @@ def _text(d, x, y, s, size, color, bold=False, anchor="la", width=None):
 SEL_BG, INPUT_BG = (40, 62, 80, 255), (28, 36, 44, 255)
 
 
+STAR = (255, 214, 102, 255)         # your saved places
+WARN = TOAST_COLORS["warn"]
+PICKER_ROWS = 9                      # result rows that fit; the list scrolls to keep the selection in view
+PICKER_TOP, PICKER_ROW_H = 92, 44    # first result row's text line, and the step between rows
+TAGS = {"pin": "pin", "door": "door", "area": "area", "user": "saved", "spot": "spot", "clear": "",
+        "save_here": "new saved place", "save_dest": "new saved place"}
+
+
+def star(d, cx, cy, r, color, scale=SS, outline=(0, 0, 0, 230)):
+    """A five-pointed star centred on (cx, cy), radius r (in unscaled pixels)."""
+    pts = []
+    for i in range(10):
+        a = math.radians(-90 + i * 36)
+        rr = r if i % 2 == 0 else r * 0.45
+        pts.append(((cx + rr * math.cos(a)) * scale, (cy + rr * math.sin(a)) * scale))
+    d.polygon(pts, fill=color, outline=outline)
+
+
+def _map_label(ld, px, py, name, side, color, gap=6):
+    """A marker's name on the mini map: right of it, or left when it would run off the edge, with
+    a dark halo so it stays readable over the tile art."""
+    label = (name or "")[:22]
+    width = ld.textlength(label, font=font(7)) / SS
+    lx, anchor = (px - gap, "rm") if px + gap + width > side - 2 else (px + gap, "lm")
+    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        _text(ld, lx + dx * 0.6, py + dy * 0.6, label, 7, (0, 0, 0, 220), anchor=anchor)
+    _text(ld, lx, py, label, 7, color, anchor=anchor)
+
+
+def picker_window(n, sel, rows=PICKER_ROWS):
+    """First row to draw so the selected one is visible (it stays a few rows from the bottom)."""
+    return max(0, min(sel - rows + 3, n - rows)) if n > rows else 0
+
+
+def picker_row_at(picker, x, y):
+    """Index in picker.results of the row drawn under panel pixel (x, y), or None."""
+    if getattr(picker, "naming", None) or not picker.results or not 8 <= x < W - 8:
+        return None
+    top = PICKER_TOP - 3                                   # where the highlight of the first row starts
+    if y < top:
+        return None
+    row = (y - top) // PICKER_ROW_H
+    i = picker_window(len(picker.results), picker.sel) + row
+    return i if row < PICKER_ROWS and i < len(picker.results) else None
+
+
 def render_picker(picker, area_name):
-    """The destination picker: query box + results list."""
+    """The destination picker: query box + results list, or naming a place you're saving."""
     img = Image.new("RGBA", (W * SS, H * SS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W * SS - 1, H * SS - 1), radius=10 * SS, fill=BG)
-    _text(d, 14, 12, "Where to?", 12, FG, bold=True)
+    naming = getattr(picker, "naming", None)
+    _text(d, 14, 12, "Name this place" if naming else "Where to?", 12, FG, bold=True)
     d.rounded_rectangle((12 * SS, 38 * SS, (W - 12) * SS, 66 * SS), radius=5 * SS, fill=INPUT_BG,
                         outline=ACCENT_RGBA, width=SS)
     q = picker.query
     shown = q if len(q) < 34 else "…" + q[-33:]
     _text(d, 20, 52, shown + "|", 11, FG, anchor="lm")
+    if naming:
+        suggest = naming.get("suggest") or area_name(naming["area"])
+        if not q:
+            _text(d, 24, 52, suggest[:34], 10, DIM, anchor="lm")
+        _text(d, 14, 80, f"in {area_name(naming['area'])}"[:52], 9, DIM)
+        _text(d, 14, 104, "Type a name and press Enter. Enter with nothing typed keeps the grey name.",
+              9, DIM, width=W - 28)
+        _legend(d, H - 20, [("Enter", "save"), ("Esc", "back")])
+        return img.resize((W, H), Image.LANCZOS)
     if not q:
-        _text(d, 24, 52, "type to search areas, pins, doors", 10, DIM, anchor="lm")
-    label = "Results" if q.strip() else "Recent"
-    _text(d, 14, 76, label, 8, DIM)
-    y = 92
+        _text(d, 24, 52, "type to search places, areas, pins", 10, DIM, anchor="lm")
+    _text(d, 14, 76, "Results" if q.strip() else "Saved and recent", 8, DIM)
+    y = PICKER_TOP
     if not picker.results:
         _text(d, 14, y, "No matches yet - explore with the recorder running" if q.strip()
-              else "No recent destinations", 9, DIM, width=W - 28)
-    for i, r in enumerate(picker.results):
+              else "No saved or recent destinations", 9, DIM, width=W - 28)
+    first = picker_window(len(picker.results), picker.sel)
+    if first:
+        _text(d, W - 14, 76, f"↑ {first} more", 8, DIM, anchor="ra")
+    confirm = getattr(picker, "confirm", None)
+    for i, r in enumerate(picker.results[first:first + PICKER_ROWS], start=first):
         if i == picker.sel:
             d.rounded_rectangle((8 * SS, (y - 3) * SS, (W - 8) * SS, (y + 38) * SS), radius=5 * SS, fill=SEL_BG)
-        color = PIN if r["kind"] == "pin" else (ROUTE if r["kind"] == "clear" else FG)
-        tag = {"pin": "pin", "door": "door", "area": "area", "user": "mark", "clear": ""}.get(r["kind"], r["kind"])
-        _text(d, 16, y, (r["name"] or "")[:40], 10, color, bold=(i == picker.sel))
-        if r.get("area"):
-            _text(d, 16, y + 18, f"{tag} · {area_name(r['area'])}"[:52], 8, DIM)
-        y += 44
-        if y > H - 50:
-            break
-    _legend(d, H - 20, [("↑↓", "choose"), ("Enter", "go"), ("Esc", "cancel")])
+        kind = r["kind"]
+        saved = kind == "user"
+        color = {"pin": PIN, "clear": ROUTE, "save_here": ROUTE, "save_dest": ROUTE}.get(kind, STAR if saved else FG)
+        x = 16
+        if saved:
+            star(d, 22, y + 7, 6, STAR)
+            x = 32
+        _text(d, x, y, (r["name"] or "")[:40], 10, color, bold=(i == picker.sel))
+        if saved and confirm is not None and confirm == r.get("id"):
+            _text(d, 16, y + 18, "Press Delete again to remove", 8, WARN)
+        elif kind == "save_dest" and r.get("suggest"):
+            _text(d, 16, y + 18, f"{r['suggest']} · {area_name(r['area'])}"[:52], 8, DIM)
+        elif r.get("area"):
+            _text(d, 16, y + 18, f"{TAGS.get(kind, kind)} · {area_name(r['area'])}"[:52], 8, DIM)
+        y += PICKER_ROW_H
+    rest = len(picker.results) - first - PICKER_ROWS
+    if rest > 0:
+        _text(d, W - 14, y - 4, f"↓ {rest} more", 8, DIM, anchor="ra")
+    sel = picker.results[picker.sel] if picker.results else None
+    items = [("↑↓", "choose"), ("Enter", "go"), ("Esc", "cancel")]
+    if sel and sel["kind"] == "user" and not q:
+        items = [("↑↓", "choose"), ("Enter", "go"), ("Del", "remove"), ("Esc", "cancel")]
+    _legend(d, H - 20, items)
     return img.resize((W, H), Image.LANCZOS)
 
 
@@ -319,19 +392,17 @@ def _map(img, d, s, g, pois, area_size, map_img=None, pan=(0, 0)):
         px, py = P(p["x"], p["y"])
         if p["kind"] == "door" and has_art:
             continue        # the tile art already shows doors; a second marker beside it looks misaligned
+        if p["kind"] == "user":
+            if 0 <= px <= side and 0 <= py <= side:
+                star(ld, px, py, 8, STAR)
+                _map_label(ld, px, py, p["name"], side, STAR, gap=10)
+            continue
         if p["kind"] == "pin" and not (0 <= px <= side and 0 <= py <= side):
             _edge_pointer(ld, px, py, side)     # outside the follow window: point to it from the border
         elif p["kind"] == "pin":
             ld.ellipse(((px - 4) * SS, (py - 4) * SS, (px + 4) * SS, (py + 4) * SS), fill=PIN,
                        outline=(0, 0, 0, 200), width=SS)
-            label = (p["name"] or "")[:22]
-            # labels go left of the dot when they'd run off the right edge of the map
-            width = ld.textlength(label, font=font(7)) / SS
-            lx, anchor = (px - 6, "rm") if px + 6 + width > side - 2 else (px + 6, "lm")
-            # dark halo so labels stay readable over the tile art
-            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                _text(ld, lx + dx * 0.6, py + dy * 0.6, label, 7, (0, 0, 0, 220), anchor=anchor)
-            _text(ld, lx, py, label, 7, PIN, anchor=anchor)
+            _map_label(ld, px, py, p["name"], side, PIN)
         else:
             ld.rectangle(((px - 2) * SS, (py - 2) * SS, (px + 2) * SS, (py + 2) * SS), fill=DOOR)
     _route_and_player(ld, s, g, pois, P)

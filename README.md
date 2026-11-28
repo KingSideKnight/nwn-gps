@@ -31,6 +31,10 @@ exclusive fullscreen). **Players: see [USER_GUIDE.md](USER_GUIDE.md).** This fil
   `WS_EX_NOACTIVATE` so clicking it never takes focus from a fullscreen game; `place()` picks a
   monitor the game isn't on and drops a remembered spot whose monitor is gone
   (`tests/test_mapwindow.py`).
+- **Saved places:** `pois` rows of kind `"user"` (`Store.save_place` / `remove_place`), named in
+  the picker's naming mode (`picker.py`). Visits never retire them, `exit_places` / `nearest_poi`
+  ignore them (pins and doors only), shared exports drop them unless `"share_places"`, and
+  `merge` skips another map's (`tests/test_saved_places.py`).
 - **Settings and updates:** `settings_window.py` (tkinter; S in the launcher window) writes
   settings.json, which the in-game part re-reads live. `updates.py` is the only network code: a
   daily GitHub release check, opt-out, never downloads.

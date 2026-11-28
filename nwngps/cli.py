@@ -7,6 +7,7 @@
   python -m nwngps.cli go <destination text> | --stop     set the in-game HUD's destination
   python -m nwngps.cli worldmap [out.png]                 export the stitched world map
   python -m nwngps.cli export [file.sqlite]               copy of your map database to share
+  python -m nwngps.cli export [file.sqlite] --with-places  ... keeping your saved places in it
   python -m nwngps.cli merge <their.sqlite> [--dry-run]   merge a friend's database (backs yours up first)
   python -m nwngps.cli imports                            friends' maps merged so far (id, file, what it added)
   python -m nwngps.cli undo-import <id>                   take one of those out again (backs your map up first)
@@ -141,6 +142,7 @@ def cmd_fix_link(store, cmd, args):
 
 
 CHANGE_LABEL = {"layout": "MAP LAYOUT CHANGED", "poi_retired": "pin/door hidden (gone)",
+                "place_removed": "saved place removed",
                 "poi_back": "pin/door back", "link_stale": "link not trusted", "link_back": "link trusted again"}
 
 
@@ -259,8 +261,12 @@ def main():
             print(f"interiors attached: {len(w.interiors)}; unplaced areas: "
                   f"{len(set(r['resref'] for r in store.db.execute('SELECT resref FROM areas')) - set(w.origin) - {i[3] for i in w.interiors})}")
         elif cmd == "export":
+            keep = "--with-places" in args
+            args = [a for a in args if a != "--with-places"]
             dest = args[0] if args else f"{store.path.stem}-share-{time.strftime('%Y%m%d')}.sqlite"
-            print(f"exported {store.stats()} to {store.export(dest, share=True)} (play times removed)")
+            out = store.export(dest, share=True, keep_places=keep)
+            print(f"exported {store.stats()} to {out} (play times removed; saved places "
+                  f"{'kept' if keep else 'left out'})")
         elif cmd == "merge":
             if not args:
                 sys.exit("usage: cli merge <their.sqlite> [--dry-run]")

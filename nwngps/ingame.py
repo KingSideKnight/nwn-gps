@@ -23,6 +23,7 @@ import ctypes
 import ctypes.wintypes as wt
 import hashlib
 import json
+import math
 import mmap
 import shutil
 import struct
@@ -39,7 +40,7 @@ from .memory import k32, modules
 from .nav import Navigator
 from .fullmap import FullMap, frame_size
 from .picker import (EV_CHAR, EV_CLEAR, EV_EXPORT, EV_FULLMAP, EV_IMPORT, EV_KEY, EV_LABELS, EV_MAPCLICK,
-                     EV_MAPKEY, EV_MOVED, EV_OPEN, EV_TOGGLE, EV_WINDOW, Picker, remember)
+                     EV_MAPKEY, EV_MOVED, EV_OPEN, EV_PICKCLICK, EV_TOGGLE, EV_WINDOW, Picker, remember)
 from . import share
 
 TOAST_SECONDS = 8.0
@@ -47,6 +48,7 @@ INBOX_CHECK_EVERY = 10.0
 UPDATE_LOOK_EVERY = 60.0     # seconds between looks at update.json until we've told you once
 SETTINGS_LOOK_EVERY = 2.0    # seconds between looks at settings.json's modification time
 
+SUGGEST_NEAR = 15.0      # metres: a map pin this close names a place you save where you stand
 POIS_CHECK_EVERY = 1.0   # seconds between checks for pins / doors the recorder just saved
 AUTO_CLEAR_AFTER = 3.5    # seconds standing at the destination before it clears itself
 KEY_NAMES = {0x0D: "Enter", 0x1B: "Esc", 0x26: "Up", 0x28: "Down", 0x08: "Backspace", 0x2E: "Delete",
@@ -73,6 +75,8 @@ O_DLLVER, O_CAPTURING, O_EVHEAD, O_MSG, O_EVENTS = 52, 56, 60, 64, 192
 O_MAP_INPUT = 1336       # int32 running totals: mouse drag x, y (pixels), wheel (120 per notch)
 O_PANEL_DRAG = 1348      # int32 x, y drag since the press (pixels), uint32 1 while held (DLL v5)
 O_MAP_RECT = 1360        # uint32 x, y, w, h of the mini map inside the panel (we write it)
+O_PY_STATE = 1384        # uint32 PY_STATE_VALID | picker open, uint32 events read when written (DLL v7)
+PY_STATE_VALID = 0x100
 SNAP_BACK = 0.25         # seconds the mini map takes to glide back to you after a drag
 VK_ESCAPE, VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN, VK_HOME = 0x1B, 0x25, 0x26, 0x27, 0x28, 0x24
 ZOOM_IN_KEYS, ZOOM_OUT_KEYS = (0x6B, 0xBB), (0x6D, 0xBD)        # numpad / main-row + and -
@@ -206,6 +210,7 @@ class Shm:
         self.set_flags(FLAG_VISIBLE)
         self.ev_tail = self.u32(O_EVHEAD)
         struct.pack_into("<IIII", self.m, O_MAP_RECT, *panel.MAP_RECT)
+        self.set_picker_open(False)
 
     def panel_drag(self):
         """((x, y) pixels the mini map has been dragged since the press, held?) from the DLL."""
@@ -254,11 +259,19 @@ class Shm:
             self.ev_tail += 1
         return out
 
+    def set_picker_open(self, is_open):
+        """Tell the DLL whether the picker is open, as of every event read so far: it keeps the
+        keyboard exactly while it is (Enter on "Save ..." keeps it open; a click can close it).
+        State first, then the count, so the DLL never pairs a new count with an old state."""
+        struct.pack_into("<I", self.m, O_PY_STATE, PY_STATE_VALID | (1 if is_open else 0))
+        struct.pack_into("<I", self.m, O_PY_STATE + 4, self.ev_tail & 0xFFFFFFFF)
+
     def status(self):
         msg = bytes(self.m[O_MSG:O_MSG + 128]).split(b"\0", 1)[0].decode(errors="replace")
         return self.u32(O_STATE), self.u32(O_FRAMES), msg, self.u32(O_DLLVER)
 
     def close(self):
+        struct.pack_into("<II", self.m, O_PY_STATE, 0, 0)    # the DLL decides on Enter / Esc again
         self.m.close()
 
 
@@ -494,6 +507,43 @@ class InGame:
         log(f"map click: destination {pick['name']} ({pick['kind']} in {pick['area']})")
         self.notify(f"Destination: {pick['name']}", "ok")
 
+    def here(self):
+        """Where you stand, for "Save where I'm standing": the area, position and a suggested
+        name (a map pin within SUGGEST_NEAR metres, else the area's name). None if not in game."""
+        snap = getattr(self, "snap", None)
+        if snap is None or snap.state != IN_GAME or not snap.area or not snap.pos:
+            return None
+        x, y = snap.pos[0], snap.pos[1]
+        z = snap.pos[2] if len(snap.pos) > 2 else 0.0
+        pins = [p for p in (self.pois if self.pois_area == snap.area else [])
+                if p["kind"] == "pin" and p["name"] and math.hypot(p["x"] - x, p["y"] - y) <= SUGGEST_NEAR]
+        near = min(pins, key=lambda p: math.hypot(p["x"] - x, p["y"] - y)) if pins else None
+        suggest = near["name"] if near else self.store.area_name(snap.area)
+        return {"area": snap.area, "x": round(x, 1), "y": round(y, 1), "z": z, "suggest": suggest}
+
+    def save_place(self, place):
+        try:
+            self.store.save_place(place["area"], place["x"], place["y"], place["name"], z=place.get("z") or 0.0)
+        except Exception as e:                      # a locked map file: tell the player, keep going
+            log(f"saving place failed: {e!r}")
+            self.notify(f"Couldn't save {place['name']}: {e}", "error")
+            return
+        log(f"saved place {place['name']!r} in {place['area']} at {place['x']},{place['y']}")
+        self.notify(f"Saved: {place['name']}", "ok")
+        self.pois_area = None                       # redraw the mini map with its star
+
+    def remove_place(self, place):
+        try:
+            gone = self.store.remove_place(place["id"])
+        except Exception as e:
+            log(f"removing place failed: {e!r}")
+            self.notify(f"Couldn't remove {place['name']}: {e}", "error")
+            return
+        self.picker.removed()
+        log(f"removed saved place {place['name']!r}" if gone else f"saved place {place['id']} was already gone")
+        self.notify(f"Removed: {place['name']}", "info")
+        self.pois_area = None
+
     def handle_events(self):
         for t, code, _mods in self.shm.events():
             if t == EV_TOGGLE:
@@ -550,24 +600,38 @@ class InGame:
                 log(f"panel moved: {ANCHORS[pos['anchor']] if pos['anchor'] < 4 else pos['anchor']} "
                     f"+{pos['off_x']},{pos['off_y']} (saved)")
             elif t == EV_OPEN:
-                self.picker.start(has_destination=self.nav is not None)
+                self.picker.start(has_destination=self.nav is not None,
+                                  dest=self.nav.dest if self.nav else None, here=self.here())
                 self.apply_flags()
                 log(f"picker opened ({len(self.picker.results)} entries)")
             elif t in (EV_CHAR, EV_KEY):
                 if t == EV_KEY:
                     log(f"picker key {KEY_NAMES.get(code, hex(code))} (query {self.picker.query!r}, "
                         f"selected {self.picker.sel})")
-                res = self.picker.handle(t, code)
-                if res:
-                    action, pick = res
-                    log(f"picker: {action}" + (f" {pick['name']}" if pick else ""))
-                    if action == "pick":
-                        set_target(None, pick=pick)
-                    elif action == "clear":
-                        set_target(None)
-                    self.apply_flags()
+                self.picker_result(self.picker.handle(t, code))
+            elif t == EV_PICKCLICK:
+                row = panel.picker_row_at(self.picker, code & 0xFFFF, code >> 16) if self.picker.open else None
+                if row is not None:
+                    log(f"picker click on row {row}")
+                    self.picker_result(self.picker.click(row))
             else:
                 log(f"unknown event {t} {code}")
+        self.shm.set_picker_open(self.picker.open)
+
+    def picker_result(self, res):
+        if not res:
+            return
+        action, pick = res
+        log(f"picker: {action}" + (f" {pick['name']}" if pick else ""))
+        if action == "pick":
+            set_target(None, pick=pick)
+        elif action == "clear":
+            set_target(None)
+        elif action == "save":
+            self.save_place(pick)
+        elif action == "remove":
+            self.remove_place(pick)
+        self.apply_flags()
 
     def area_map(self, snap):
         """Tile-art map of the current area (from live memory, else the recorded layout)."""
@@ -630,6 +694,7 @@ class InGame:
         pid = self.session.mem.pid if self.session.mem else None
         if pid and pid != self.injected_pid and snap.state != "NO_GAME":
             self.ensure_dll(pid)
+        self.snap = snap
         self.handle_events()
         self.update_target()
         if snap.state == IN_GAME and snap.area != self.pois_area:
@@ -653,9 +718,10 @@ class InGame:
         if full and self.fullmap_r:
             self.map_mouse()
         if self.picker.open:
-            key = ("picker", self.picker.query, self.picker.sel, len(self.picker.results))
+            key = ("picker", self.picker.query, self.picker.sel, len(self.picker.results),
+                   bool(self.picker.naming), self.picker.confirm)
         else:
-            key = (full, data, self.pin_labels, full and self.fullmap_r and self.fullmap_r.view_key(), toast, self.inbox_n, snap.state, snap.area, len(self.pois),
+            key = (full, data, full and self.store.places_version(), self.pin_labels, full and self.fullmap_r and self.fullmap_r.view_key(), toast, self.inbox_n, snap.state, snap.area, len(self.pois),
                    tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                    tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
                    (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None, pan)

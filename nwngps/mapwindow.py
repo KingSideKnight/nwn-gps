@@ -333,7 +333,7 @@ class Worker(threading.Thread):
             self.area_img = maps.area_image(self.maps, self.store, self.session.mem, snap, log)
         g = self.nav.update(snap) if self.nav else None
         data = self.fm.refresh()
-        key = ("map", size, data, self.fm.view_key(), self.fm.pin_labels, snap.area, self.search_key,
+        key = ("map", size, data, self.store.places_version(), self.fm.view_key(), self.fm.pin_labels, snap.area, self.search_key,
                tuple(round(v * 2) for v in snap.pos[:2]) if snap.pos else None,
                tuple(round(v, 1) for v in snap.facing[:2]) if snap.facing else None,
                (g.status, g.line1, g.line2, round(g.distance or 0), g.target) if g else None)

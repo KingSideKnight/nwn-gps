@@ -60,7 +60,8 @@ def validate(values, base):
     out = dict(base)
     out.update(hotkeys=keys, game_dir=game, user_dir=user, death_areas=deaths,
                check_updates=bool(values["check_updates"]), dm_mode=bool(values["dm_mode"]),
-               map_window=bool(values.get("map_window", base.get("map_window"))))
+               map_window=bool(values.get("map_window", base.get("map_window"))),
+               share_places=bool(values.get("share_places", base.get("share_places"))))
     return out, problems
 
 
@@ -251,6 +252,13 @@ def main():
         ttk.Label(frm, text=hint, foreground="#555").grid(row=row, column=1, sticky="w")
         row += 1
 
+    heading("Sharing")
+    share_pl = tk.BooleanVar(value=bool(s.get("share_places")))
+    ttk.Checkbutton(frm, text="Include my saved places in maps I export for friends (they can show "
+                              "where you live or keep things)", variable=share_pl).grid(
+        row=row, column=0, columnspan=3, sticky="w")
+    row += 1
+
     heading("Updates")
     upd = tk.BooleanVar(value=s.get("check_updates", True) is not False)
     ttk.Checkbutton(frm, text="Check once a day whether a newer NWN GPS is out (asks github.com; "
@@ -282,7 +290,7 @@ def main():
         stop_capture()
         values = {"hotkeys": {a: v.get() for a, v in key_vars.items()}, "game_dir": dirs["game_dir"].get(),
                   "user_dir": dirs["user_dir"].get(), "death_areas": death.get(), "check_updates": upd.get(),
-                  "dm_mode": dm.get(), "map_window": mapwin.get()}
+                  "dm_mode": dm.get(), "map_window": mapwin.get(), "share_places": share_pl.get()}
         new, problems = validate(values, config.load_settings())
         if problems:
             status.configure(text="Not saved:\n" + "\n".join(problems), foreground="#b00")

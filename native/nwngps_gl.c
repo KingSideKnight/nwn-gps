@@ -25,7 +25,7 @@
 #include <string.h>
 
 /* ---- shared memory layout v2 (keep in sync with nwngps/ingame.py) ---- */
-#define DLL_VERSION 6u
+#define DLL_VERSION 7u
 #define SHM_NAME L"nwngps_overlay_v3"
 #define SHM_MAGIC 0x5350474Eu /* 'NGPS' */
 #define MAX_W 2048
@@ -51,6 +51,8 @@
 #define EV_MAPKEY 11u  /* code = virtual key pressed while the full map is open (Esc, arrows, Home, +/-) */
 #define EV_MAPCLICK 12u /* left click (not a drag) on the open full map: code = x | y << 16, window pixels */
 #define EV_WINDOW 13u  /* v6, Ctrl+Shift+W: map window (for a second monitor) on / off */
+#define EV_PICKCLICK 14u /* v7, left click on the open picker: code = x | y << 16, pixels of the panel image */
+#define PY_STATE_VALID 0x100u /* py_state: Python (v7+) says whether the picker is open (bit 0) */
 #define CLICK_SLOP 5    /* pixels the mouse may move between press and release and still be a click */
 
 /* anchors: which screen corner the offsets are measured from */
@@ -99,6 +101,11 @@ typedef struct {
     volatile uint32_t map_rect[4];                        /* at offset 1360 */
     /* v6: hotkeys added after the v4 table (same format): the map window */
     uint32_t hotkeys2[HK_COUNT - HK_TABLE1][2];           /* at offset 1376 */
+    /* v7: Python's picker state (PY_STATE_VALID | open) and how many events it had read when it
+       wrote it. Once Python has caught up with every event, its word decides whether we keep the
+       keyboard, so a picker that stays open after Enter (naming a saved place) or that a click
+       closed is followed exactly. 0 = old Python: we decide on Enter / Esc as before. */
+    volatile uint32_t py_state, py_ev_seen;               /* at offset 1384 */
 } ShmHeader;
 
 /* ---- GL constants / function pointers beyond GL 1.1 ---- */
@@ -487,6 +494,34 @@ static void set_capture(int on) {
     if (g_shm) g_shm->capturing = (uint32_t)on;
 }
 
+/* A v7+ Python is running and alive (published a frame in the last 3 s): it decides when the
+   picker closes. Otherwise (old or dead Python) we let go of the keyboard on Enter / Esc ourselves,
+   so the game can never be left without its keys. */
+static int py_drives_capture(void) {
+    return g_shm && (g_shm->py_state & PY_STATE_VALID) && GetTickCount64() - g_last_update < 3000;
+}
+
+/* Follow Python's picker once it has read every event we sent (until then ours is newer). */
+static void sync_capture(void) {
+    int want;
+    if (!py_drives_capture() || g_shm->py_ev_seen != g_shm->ev_head) {
+        if (g_capturing && g_shm && (g_shm->py_state & PY_STATE_VALID) && !py_drives_capture())
+            set_capture(0);            /* Python went quiet with the picker open: give the keys back */
+        return;
+    }
+    want = (g_shm->py_state & 1u) != 0;
+    if (want != (int)g_capturing) set_capture(want);
+}
+
+static int g_pickdown = 0;            /* swallow the button-up of a click the picker took */
+static ULONGLONG g_pick_tick = 0;     /* when it was: the second half of a double click is ours too */
+static int g_pick_wheel = 0;          /* mouse wheel over the picker, not yet a whole notch */
+
+/* Is window point (mx, my) on the panel as it was last drawn? */
+static int on_panel(int mx, int my) {
+    return g_drawn && mx >= g_px && mx < g_px + (int)g_tex_w && my >= g_py && my < g_py + (int)g_tex_h;
+}
+
 /* Store a top-left position as offsets from the nearest screen corner. */
 static void set_position(int x, int y) {
     int w = (int)g_tex_w, hh = (int)g_tex_h, right, bottom;
@@ -505,15 +540,21 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (!g_unloading && g_shm) {
         int ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0;
         int mx = (int)(short)LOWORD(lp), my = (int)(short)HIWORD(lp);
+        sync_capture();
         switch (msg) {
         case WM_LBUTTONDOWN:
-            if (ctrl && shift && g_drawn && mx >= g_px && mx < g_px + (int)g_tex_w &&
-                my >= g_py && my < g_py + (int)g_tex_h) {
+            if (ctrl && shift && on_panel(mx, my)) {
                 g_dragging = 1;
                 g_drag_dx = mx - g_px;
                 g_drag_dy = my - g_py;
                 SetCapture(h);
                 return 0;   /* the game never sees this click */
+            }
+            if (g_capturing && on_panel(mx, my)) {   /* click a result in the picker */
+                push_event(EV_PICKCLICK, (uint32_t)(mx - g_px) | ((uint32_t)(my - g_py) << 16));
+                g_pickdown = 1;
+                g_pick_tick = GetTickCount64();
+                return 0;
             }
             if (!map_open() && on_minimap(mx, my)) {   /* look around on the mini map */
                 g_pandrag = 1;
@@ -555,16 +596,37 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case WM_MOUSEWHEEL:
             if (map_open()) { g_shm->map_wheel += GET_WHEEL_DELTA_WPARAM(wp); return 0; }
+            if (g_capturing) {                 /* scroll the picker's list (wheel points are screen-relative) */
+                POINT pt = {(short)LOWORD(lp), (short)HIWORD(lp)};
+                ScreenToClient(h, &pt);
+                if (on_panel(pt.x, pt.y)) {
+                    g_pick_wheel += GET_WHEEL_DELTA_WPARAM(wp);
+                    for (; g_pick_wheel >= WHEEL_DELTA; g_pick_wheel -= WHEEL_DELTA) push_event(EV_KEY, VK_UP);
+                    for (; g_pick_wheel <= -WHEEL_DELTA; g_pick_wheel += WHEEL_DELTA) push_event(EV_KEY, VK_DOWN);
+                    return 0;
+                }
+            }
             break;
         case WM_LBUTTONDBLCLK:
+            if (on_panel(mx, my) && (g_capturing || GetTickCount64() - g_pick_tick < 600)) {
+                /* second click of a double click: a click like any other while the picker is open
+                   (Python ignores it if the first one already closed it); never the game's */
+                if (g_capturing) push_event(EV_PICKCLICK, (uint32_t)(mx - g_px) | ((uint32_t)(my - g_py) << 16));
+                g_pickdown = 1;
+                g_pick_tick = GetTickCount64();
+                return 0;
+            }
+            /* fall through */
         case WM_RBUTTONDOWN:
         case WM_RBUTTONUP:
         case WM_RBUTTONDBLCLK:
         case WM_MBUTTONDOWN:
         case WM_MBUTTONUP:
             if (map_open()) return 0;          /* clicks on the map don't walk / act in the game */
+            if (g_capturing && on_panel(mx, my)) return 0;   /* nor clicks on the open picker */
             break;
         case WM_LBUTTONUP:
+            if (g_pickdown) { g_pickdown = 0; return 0; }
             if (g_pandrag) {                   /* let go: the view snaps back to you */
                 end_pan();
                 ReleaseCapture();
@@ -615,7 +677,7 @@ static LRESULT CALLBACK hooked_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_capturing) {
                 if (wp == VK_RETURN || wp == VK_ESCAPE) {
                     push_event(EV_KEY, (uint32_t)wp);
-                    set_capture(0);
+                    if (!py_drives_capture()) set_capture(0);   /* else Python says if the picker closed */
                     g_swallow_char = 1;
                 } else if (wp == VK_UP || wp == VK_DOWN || wp == VK_BACK || wp == VK_DELETE ||
                            wp == VK_PRIOR || wp == VK_NEXT || wp == VK_TAB || wp == VK_HOME || wp == VK_END) {

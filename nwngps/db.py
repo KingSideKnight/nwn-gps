@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS changes (
     id          INTEGER PRIMARY KEY,
     t           REAL,
     area        TEXT,
-    what        TEXT,       -- layout | poi_retired | poi_back | link_stale | link_back
+    what        TEXT,       -- layout | poi_retired | poi_back | link_stale | link_back | place_removed
     ref         INTEGER,    -- pois.id / transitions.id (NULL for layout)
     note        TEXT,
     data        TEXT,       -- layout: the previous area_tiles row as JSON
@@ -116,6 +116,8 @@ GOOD_SCAN = 0.5           # a visit only counts if it saw at least this share of
 PASSED_NEAR = 15.0        # metres: the game only loads doors near you (an area's count varies 33-47
                           # as you walk), so something counts as missed only if a scan ran this close
 SAME_DOOR = 1.5           # metres: two links starting this close (or at the same door) share an exit
+PLACE = "user"            # pois.kind of a place you saved yourself (never retired by visits, never an exit)
+MAX_PLACE_NAME = 60
 
 
 def db_name(world):
@@ -623,13 +625,14 @@ class Store:
         nothing to undo (unknown id, already undone, or a 'back' entry)."""
         import json
         c = self.db.execute("SELECT * FROM changes WHERE id=?", (change_id,)).fetchone()
-        if not c or c["undone"] is not None or c["what"] not in ("layout", "poi_retired", "link_stale"):
+        if not c or c["undone"] is not None or c["what"] not in ("layout", "poi_retired", "link_stale",
+                                                                "place_removed"):
             return None
         self.backup("before-restore")
         if c["what"] == "layout":
             old = json.loads(c["data"])
             self.save_tiles(c["area"], old["tileset"], old["width"], old["height"], json.loads(old["tiles"]))
-        elif c["what"] == "poi_retired":
+        elif c["what"] in ("poi_retired", "place_removed"):
             self.db.execute("UPDATE pois SET retired=NULL, missed=0 WHERE id=?", (c["ref"],))
         else:
             self.db.execute("UPDATE transitions SET stale=NULL WHERE id=?", (c["ref"],))
@@ -715,20 +718,60 @@ class Store:
 
     def search(self, text, limit=20):
         like = f"%{text}%"
+        saved = self.db.execute(
+            "SELECT id, kind, area, name, x, y FROM pois WHERE kind=? AND retired IS NULL AND name LIKE ? "
+            "ORDER BY name LIMIT ?", (PLACE, like, limit)).fetchall()
         areas = self.db.execute(
             "SELECT 'area' AS kind, resref AS area, name, NULL AS x, NULL AS y FROM areas "
             "WHERE name LIKE ? OR resref LIKE ? ORDER BY visits DESC LIMIT ?", (like, like, limit)).fetchall()
         pois = self.db.execute(
             "SELECT p.kind, p.area, p.name || COALESCE(' ['||p.tag||']','') AS name, p.x, p.y FROM pois p "
             "WHERE (p.name LIKE ? OR p.tag LIKE ?) AND p.name NOT IN ('Door','Window') AND p.retired IS NULL "
-            "LIMIT ?", (like, like, limit)).fetchall()
-        return list(areas) + list(pois)
+            "AND p.kind != ? LIMIT ?", (like, like, PLACE, limit)).fetchall()
+        return list(saved) + list(areas) + list(pois)
+
+    # --- saved places (your own) ----------------------------------------------
+    def saved_places(self):
+        """Places you saved, by name: rows of id, kind, area, name, x, y."""
+        return self.db.execute("SELECT id, kind, area, name, x, y FROM pois WHERE kind=? AND retired IS NULL "
+                               "ORDER BY name COLLATE NOCASE", (PLACE,)).fetchall()
+
+    def save_place(self, area, x, y, name, z=0.0):
+        """Save a place (or rename the saved place already within POI_MERGE_DIST). Returns its id."""
+        name = " ".join(str(name or "").split())[:MAX_PLACE_NAME] or self.area_name(area)
+        now = time.time()
+        for r in self.db.execute("SELECT id, x, y FROM pois WHERE area=? AND kind=? AND retired IS NULL",
+                                 (area, PLACE)).fetchall():
+            if dist(r["x"], r["y"], x, y) < POI_MERGE_DIST:
+                self.db.execute("UPDATE pois SET name=?, last_seen=? WHERE id=?", (name, now, r["id"]))
+                self.db.commit()
+                return r["id"]
+        cur = self.db.execute("INSERT INTO pois(area,kind,name,x,y,z,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?)",
+                              (area, PLACE, name, x, y, z or 0.0, now, now))
+        self.db.commit()
+        return cur.lastrowid
+
+    def places_version(self):
+        """Changes when a place is saved, renamed or removed (from the game or another window)."""
+        return tuple(self.db.execute("SELECT COUNT(*), MAX(id), MAX(last_seen), MAX(retired) FROM pois "
+                                     "WHERE kind=?", (PLACE,)).fetchone())
+
+    def remove_place(self, pid):
+        """Hide a saved place. It's kept, and `restore` (see `changes`) brings it back."""
+        r = self.db.execute("SELECT area, name FROM pois WHERE id=? AND kind=? AND retired IS NULL",
+                            (pid, PLACE)).fetchone()
+        if r is None:
+            return False
+        self.db.execute("UPDATE pois SET retired=? WHERE id=?", (time.time(), pid))
+        self.log_change(r["area"], "place_removed", pid, f"saved place {r['name']} removed")
+        self.db.commit()
+        return True
 
     def exit_places(self):
         """What the router needs to judge where you came out: {"pois": {area: [(x, y)]} (doors and
         pins still there), "sizes": {area: (w, h) tiles}}."""
         pois, sizes = {}, {}
-        for r in self.db.execute("SELECT area, x, y FROM pois WHERE retired IS NULL"):
+        for r in self.db.execute("SELECT area, x, y FROM pois WHERE retired IS NULL AND kind IN ('pin','door')"):
             pois.setdefault(r[0], []).append((r[1], r[2]))
         for r in self.db.execute("SELECT resref, width, height FROM areas"):
             if r[1] and r[2]:
@@ -753,9 +796,10 @@ class Store:
         return self.db.execute("SELECT * FROM pois WHERE id=?", (pid,)).fetchone()
 
     # --- sharing ------------------------------------------------------------
-    def export(self, dest, share=False):
+    def export(self, dest, share=False, keep_places=False):
         """Consistent copy of this database (safe while the recorder is writing).
-        share=True strips when-you-played data (timestamps, visit counts) from the copy."""
+        share=True strips when-you-played data (timestamps, visit counts) from the copy, and your
+        saved places unless keep_places (they can say where you live)."""
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         out = sqlite3.connect(dest)
@@ -770,6 +814,8 @@ class Store:
                 out.execute("DELETE FROM changes")              # your own play history
                 out.execute("DELETE FROM imports")              # whose maps you merged
                 out.execute("DELETE FROM sightings")
+                if not keep_places:
+                    out.execute("DELETE FROM pois WHERE kind=?", (PLACE,))
                 for table in ("areas", "pois", "transitions", "area_tiles"):
                     out.execute(f"UPDATE {table} SET import_id=NULL")
             out.execute("VACUUM")             # don't leave the old values in free pages
@@ -794,7 +840,7 @@ class Store:
         its exports you import, so re-imports can't make an untrusted teleport routable."""
         other = open_untrusted(other_path)
         added = {"areas": 0, "areas_updated": 0, "pois": 0, "transitions": 0, "transitions_seen_again": 0,
-                 "tile_layouts": 0, "gone_skipped": 0, "rejected": 0}
+                 "tile_layouts": 0, "gone_skipped": 0, "places_skipped": 0, "rejected": 0}
         try:
             name = Path(other_path).name
             theirs, mine = file_world(other, other_path), self.my_world()
@@ -855,6 +901,9 @@ class Store:
             r = clean_poi(dict(r))
             if r is None:
                 added["rejected"] += 1
+                continue
+            if r["kind"] == PLACE:
+                added["places_skipped"] += 1        # their saved places stay theirs
                 continue
             self.upsert_poi(r["area"], r["kind"], r["name"], r["tag"], r["x"], r["y"], r["z"], live=False,
                             import_id=iid)

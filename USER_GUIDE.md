@@ -106,7 +106,7 @@ upgrading keeps them.
 ## In the game
 | Keys | What it does |
 |---|---|
-| **Ctrl+Shift+F** | Choose a destination: type to search places, ↑/↓ to pick, Enter to go, Esc to cancel |
+| **Ctrl+Shift+F** | Choose a destination: type to search places, then **click** a result (or ↑/↓ or the mouse wheel to pick and Enter to go). Esc cancels. With nothing typed it lists your [saved places](#saved-places) and recent destinations |
 | **Ctrl+Shift+X** | Clear the destination (it also clears itself a few seconds after you arrive) |
 | **Ctrl+Shift+M** | Full-screen world map (press again, or **Esc**, to close). **Click** a building, a map pin or any spot to go there. Drag it or use the arrow keys to look around, mouse wheel or **+ / -** to zoom, **Home** to jump back to you |
 | **Ctrl+Shift+L** | Pin names on the full-screen map on / off (the dots stay; it remembers your choice) |
@@ -124,6 +124,31 @@ need to memorise them. To change them, press S in the NWN GPS window (see [Setti
 your destination; a click anywhere else in an area sends you to that spot. The route appears on
 the map straight away, and the panel guides you as usual. A click that turns into a drag just
 moves the map.
+
+## Saved places
+Star the places you keep going back to (your home, a bank, a shop, a spot in the wilds) and get
+there again in two key presses.
+
+- **Save a place:** press **Ctrl+Shift+F** and, with nothing typed, pick
+  - **Save where I'm standing**, or
+  - **Save current destination** (whatever you're heading to now: a search result or a spot you
+    clicked on the map).
+
+  Then type a name and press **Enter**. The grey name already in the box (the nearest map pin, or
+  the area's name) is used if you just press Enter. **Esc** goes back without saving. Saving
+  right next to a place you saved before renames it.
+- **Go there:** press **Ctrl+Shift+F**. Your saved places are listed first (with a ★), before
+  recent destinations. Typing finds them too, ahead of other results.
+- **See them:** they're gold stars on the small map, the full-screen map and the map window.
+  Click a star to go there.
+- **Remove one:** press **Ctrl+Shift+F**, select it and press **Delete** twice. Removed places
+  aren't lost: `NWN-GPS.exe cli changes` lists them and `NWN-GPS.exe cli restore <id>` brings one
+  back.
+
+Saved places belong to the server's map you saved them on. They never count as doors or exits, so
+they can't change your routes. They're left out of maps you export for friends unless you turn
+that on in Settings, and saved places in a friend's map are never added to yours (the import
+message says how many were left out).
 
 ## Map window
 **Experimental:** it works, but it's new and hasn't been tried on many setups yet. If something
@@ -228,8 +253,8 @@ back by hand.
   the first one imported counts and the other is kept as untrusted.
 - The same file sent twice is only imported once (the second copy just moves to `Inbox\merged`),
   and a teleport a friend saw once doesn't become a route however many of their maps you import.
-- Exported maps don't include when you played (times and visit counts are removed), or whose maps
-  you've imported. They do carry a random id for your map (nothing about you), so a friend's GPS
+- Exported maps don't include when you played (times and visit counts are removed), whose maps
+  you've imported, or your [saved places](#saved-places) (unless you turn that on in Settings). They do carry a random id for your map (nothing about you), so a friend's GPS
   counts your map once.
 - Imported files are checked thoroughly and anything invalid is skipped, but routes from a friend's
   map are only as good as that map: **only import maps from people you trust.** See `SECURITY.md`.
@@ -248,6 +273,8 @@ which works while NWN GPS isn't running too). There you can:
 - **Folders:** the game folder and NWN user folder, if they weren't found by themselves. These
   apply the next time you start NWN GPS.
 - **Map window:** turn the [map window](#map-window) on or off (experimental).
+- **Sharing:** whether maps you export for friends include your [saved places](#saved-places)
+  (off unless you turn it on).
 - **Updates:** turn the daily update check on or off, or **Check now** (see
   [Updates](#updates)).
 
@@ -265,6 +292,7 @@ NWN GPS first):
   The recorder picks this up at the next area change, no restart needed.
 - `"check_updates"`: `false` turns off the daily update check.
 - `"map_window"`: `true` shows the [map window](#map-window) (what Ctrl+Shift+W switches).
+- `"share_places"`: `true` puts your saved places in maps you export for friends.
 
 ## Updates
 Once a day, when it starts, NWN GPS asks GitHub (where it's published) whether a newer version is

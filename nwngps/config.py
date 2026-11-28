@@ -70,6 +70,8 @@ DEFAULTS = {
     "check_updates": True,
     # A separate map window, e.g. for a second monitor (Ctrl+Shift+W in the game turns it on / off).
     "map_window": False,
+    # Put your saved places in map files you export for friends (off: they can say where you live).
+    "share_places": False,
 }
 
 

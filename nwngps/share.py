@@ -72,7 +72,9 @@ class Jobs:
             store = Store(self.world)
             try:
                 dest = EXPORTS / f"nwn-gps-{store.path.stem}-{time.strftime('%Y-%m-%d_%H%M')}.sqlite"
-                store.export(dest, share=True)       # no play times in files you send to others
+                from . import config
+                keep = bool(config.load_settings().get("share_places"))
+                store.export(dest, share=True, keep_places=keep)   # no play times in files you send to others
                 st = store.stats()
             finally:
                 store.close()
@@ -88,7 +90,7 @@ class Jobs:
                 return
             self.notify(f"Merging {len(files)} map{'s' if len(files) > 1 else ''}...", "info")
             store = Store(self.world)
-            total = {"areas": 0, "pois": 0, "transitions": 0, "tile_layouts": 0}
+            total = {"areas": 0, "pois": 0, "transitions": 0, "tile_layouts": 0, "places_skipped": 0}
             bad, elsewhere, again, done = [], [], [], 0
             try:
                 store.backup("before-import")
@@ -113,6 +115,9 @@ class Jobs:
                 store.close()
             msg = (f"Imported: +{total['areas']} areas, +{total['pois']} places, "
                    f"+{total['transitions']} routes, +{total['tile_layouts']} maps")
+            if total["places_skipped"]:
+                n = total["places_skipped"]
+                msg += f". Their {n} saved place{'s' if n > 1 else ''} not added (yours stay yours)"
             if done:
                 msg += ". Undo: Settings > Imported maps"
             if again:

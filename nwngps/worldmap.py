@@ -541,13 +541,24 @@ def _outlined(d, xy, text, f, anchor, outline, fill):
 
 
 def _markers(d, world, store, cid, P, out_w, out_h, names, pin_labels=True, hits=None):
-    """Building markers (squares, at the door) and the areas' map pins (dots) of cluster `cid`.
+    """Building markers (squares, at the door), the areas' map pins (dots) and your saved places
+    (stars) of cluster `cid`.
     Labels never overlap each other or the area names; dots are always drawn. pin_labels=False
     leaves out the pins' names (building names stay)."""
-    from .panel import display_pois
+    from .panel import STAR, display_pois, star
     taken = _Taken(d.textbbox((cx, ty), name, font=_font(14, True), anchor="mt") for cx, ty, name in names)
     visible = lambda px, py: -20 <= px < out_w + 20 and -20 <= py < out_h + 20
     shown, on_top = _in_view(world, cid, P, out_w, out_h)
+    stars = []                # your saved places: their names claim space before any other label
+    for a in shown:
+        for p in store.area_pois(a):
+            if p["kind"] != "user":
+                continue
+            wx, wy = world.to_world(a, p["x"], p["y"])
+            px, py = P(wx, wy)
+            if visible(px, py) and not on_top(a, wx, wy):
+                stars.append((px, py, a, p))
+                _label(d, px + 6, py, p["name"] or "", taken, size=12)
     doors, labelled = {}, set()
     for parent, x, y, inner in world.interiors:
         if world.cluster.get(parent) != cid or (parent, round(x), round(y)) in labelled:
@@ -581,6 +592,10 @@ def _markers(d, world, store, cid, P, out_w, out_h, names, pin_labels=True, hits
                 _label(d, px, py, p["name"], taken)
             if hits is not None:
                 hits.append((px, py, {"kind": "pin", "area": a, "name": p["name"], "x": p["x"], "y": p["y"]}))
+    for px, py, a, p in stars:  # drawn last so they sit on top of pins and building markers
+        star(d, px, py, 11, STAR, scale=1, outline=(0, 0, 0, 255))
+        if hits is not None:
+            hits.append((px, py, {"kind": "user", "area": a, "name": p["name"], "x": p["x"], "y": p["y"]}))
 
 
 def join_lines(world, cid):
