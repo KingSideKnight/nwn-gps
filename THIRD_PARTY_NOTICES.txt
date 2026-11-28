@@ -8,7 +8,7 @@ also contains the following software, each under its own license:
   Python Software Foundation License Version 2 - https://docs.python.org/3/license.html
 - Pillow (image drawing)
   MIT-CMU License (HPND) - https://github.com/python-pillow/Pillow/blob/main/LICENSE
-- NumPy (bundled as a dependency of Pillow)
+- NumPy (walking paths inside areas; also used by Pillow)
   BSD 3-Clause License - https://github.com/numpy/numpy/blob/main/LICENSE.txt
   (its license files are included under _internal\numpy-*.dist-info\licenses)
 - Tcl/Tk (used by the optional desktop overlay)
